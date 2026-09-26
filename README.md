@@ -85,6 +85,20 @@ gopro-yank archive --out /Volumes/Photos/GoPro
 gopro-yank verify --out /Volumes/Photos/GoPro
 ```
 
+Only need part of the library, say for one video project? Give it its own
+folder and a capture window. Times are the camera's clock; `--to` includes the
+whole day or minute you give it. The folder remembers its selection, so later
+runs stay inside it (`--all` widens it back out).
+
+```sh
+gopro-yank library --from 2026-09-12 --to 2026-09-14 --type Video
+gopro-yank archive --out ~/Movies/tahoe --from 2026-09-12T08:00 --to 2026-09-14T22:00
+gopro-yank delete --out ~/Movies/tahoe
+```
+
+`delete` asks you to type `DELETE` and, like the app, removes only the files it
+recorded.
+
 Run `gopro-yank <command> --help` for options. On a computer without a browser,
 use `gopro-yank login --no-browser`. Environment-based setups can start from
 [`.env.example`](.env.example). The old `pull` command remains an alias for
