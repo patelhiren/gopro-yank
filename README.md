@@ -86,8 +86,9 @@ gopro-yank verify --out /Volumes/Photos/GoPro
 ```
 
 Only need part of the library, say for one video project? Give it its own
-folder and a capture window. Times are the camera's clock; `--to` includes the
-whole day or minute you give it. The folder remembers its selection, so later
+folder and a capture window. Times are the camera's clock, which can differ
+from the hours gopro.com shows; `--to` includes the whole day or minute you
+give it. The folder remembers its selection, so later
 runs stay inside it (`--all` widens it back out).
 
 ```sh

@@ -221,7 +221,7 @@ type selectionFlags struct {
 
 func addSelectionFlags(flags *flag.FlagSet) selectionFlags {
 	return selectionFlags{
-		from:  flags.String("from", "", "first capture date or time, YYYY-MM-DD[THH:MM]"),
+		from:  flags.String("from", "", "first capture date or time on the camera clock, YYYY-MM-DD[THH:MM]"),
 		to:    flags.String("to", "", "last capture date or time, inclusive, YYYY-MM-DD[THH:MM]"),
 		types: flags.String("type", "", "media types to include, comma separated, e.g. Video,TimeLapseVideo"),
 		all:   flags.Bool("all", false, "select the whole library, replacing a saved selection"),
