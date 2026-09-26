@@ -7,14 +7,15 @@ import (
 	"strings"
 )
 
+// humanBytes uses decimal units so sizes match Finder and disk labels.
 func humanBytes(value int64) string {
 	size := float64(value)
 	units := []string{"B", "KB", "MB", "GB", "TB", "PB"}
 	for _, unit := range units {
-		if size < 1024 || unit == "PB" {
+		if size < 1000 || unit == "PB" {
 			return fmt.Sprintf("%.1f %s", size, unit)
 		}
-		size /= 1024
+		size /= 1000
 	}
 	return fmt.Sprintf("%.1f PB", size)
 }

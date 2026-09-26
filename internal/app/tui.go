@@ -131,11 +131,11 @@ func newTUIModel(ctx context.Context, version string, demo bool) tuiModel {
 func demoLibraryInspection(root string) LibraryInspection {
 	return LibraryInspection{
 		Total:          847,
-		TotalBytes:     386 * 1024 * 1024 * 1024,
+		TotalBytes:     386 * 1000 * 1000 * 1000,
 		Archived:       312,
-		ArchivedBytes:  142 * 1024 * 1024 * 1024,
+		ArchivedBytes:  142 * 1000 * 1000 * 1000,
 		Remaining:      531,
-		RemainingBytes: 244 * 1024 * 1024 * 1024,
+		RemainingBytes: 244 * 1000 * 1000 * 1000,
 		Manual:         4,
 		Earliest:       "2018-06-14",
 		Latest:         "2026-07-28",
@@ -235,12 +235,12 @@ func startArchive(ctx context.Context, options ArchiveOptions, demo bool) <-chan
 					return
 				case <-time.After(120 * time.Millisecond):
 				}
-				download := DownloadResult{MediaID: fmt.Sprintf("demo-%03d", index), Status: "ok", Bytes: int64(140+index*9) * 1024 * 1024}
+				download := DownloadResult{MediaID: fmt.Sprintf("demo-%03d", index), Status: "ok", Bytes: int64(140+index*9) * 1000 * 1000}
 				transferred += download.Bytes
 				event := ArchiveEvent{Stage: "Archiving originals", Current: index, Total: 12, Transferred: transferred, Result: &download}
 				events <- archiveMessage{event: &event}
 			}
-			result := ArchiveResult{Transferred: transferred, Elapsed: time.Since(start), Summary: Summary{Archived: 324, Files: 324, Bytes: 144 * 1024 * 1024 * 1024, Manual: 4}, Verification: VerificationResult{CheckedItems: 324, CheckedFiles: 324, CheckedBytes: 144 * 1024 * 1024 * 1024}}
+			result := ArchiveResult{Transferred: transferred, Elapsed: time.Since(start), Summary: Summary{Archived: 324, Files: 324, Bytes: 144 * 1000 * 1000 * 1000, Manual: 4}, Verification: VerificationResult{CheckedItems: 324, CheckedFiles: 324, CheckedBytes: 144 * 1000 * 1000 * 1000}}
 			events <- archiveMessage{result: &result}
 			return
 		}
