@@ -26,7 +26,7 @@ type LibraryInspection struct {
 	ArchiveRoot    string
 	Selection      Selection
 	Unselected     int
-	items          []MediaItem
+	library        []MediaItem
 }
 
 type ArchiveOptions struct {
@@ -93,7 +93,6 @@ func inspectItems(items []MediaItem, archive *Archive, location *time.Location) 
 		Total:       len(items),
 		Types:       map[string]int{},
 		ArchiveRoot: archive.Root,
-		items:       append([]MediaItem(nil), items...),
 	}
 	for _, item := range items {
 		inspection.TotalBytes += item.FileSize
@@ -143,30 +142,29 @@ func InspectLibrary(ctx context.Context, root, envPath string, perPage int, requ
 	if err != nil {
 		return LibraryInspection{}, err
 	}
+	return selectLibrary(root, items, requested)
+}
+
+// SelectLibrary re-plans an inspected library for a folder and selection
+// without reading GoPro again. A nil selection uses the folder's saved one.
+func SelectLibrary(root string, inspection LibraryInspection, requested *Selection) (LibraryInspection, error) {
+	return selectLibrary(root, inspection.library, requested)
+}
+
+func selectLibrary(root string, library []MediaItem, requested *Selection) (LibraryInspection, error) {
 	archive, err := NewArchive(root)
 	if err != nil {
 		return LibraryInspection{}, err
 	}
 	selection := resolveSelection(archive, requested)
-	selected, err := selection.Filter(items)
+	selected, err := selection.Filter(library)
 	if err != nil {
 		return LibraryInspection{}, err
 	}
 	location, _ := selection.location()
 	inspection := inspectItems(selected, archive, location)
-	inspection.Selection, inspection.Unselected = selection, len(items)-len(selected)
+	inspection.Selection, inspection.Unselected, inspection.library = selection, len(library)-len(selected), library
 	return inspection, nil
-}
-
-func ReplanLibrary(root string, inspection LibraryInspection) (LibraryInspection, error) {
-	archive, err := NewArchive(root)
-	if err != nil {
-		return LibraryInspection{}, err
-	}
-	location, _ := inspection.Selection.location()
-	replanned := inspectItems(inspection.items, archive, location)
-	replanned.Selection, replanned.Unselected = inspection.Selection, inspection.Unselected
-	return replanned, nil
 }
 
 func saveSourceSnapshot(ctx context.Context, client *GoProClient, archive *Archive, user string, perPage int, emit func(ArchiveEvent)) ([]MediaItem, error) {

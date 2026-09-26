@@ -27,6 +27,14 @@ const (
 	screenResult
 	screenDeleteConfirm
 	screenError
+	screenSelection
+)
+
+const (
+	selectFrom = iota
+	selectTo
+	selectTypes
+	selectFieldCount
 )
 
 type tuiAction struct {
@@ -77,13 +85,18 @@ type tuiModel struct {
 	progress    progress.Model
 	pathInput   textinput.Model
 	deleteInput textinput.Model
-	cancel      context.CancelFunc
-	events      <-chan archiveMessage
-	archiveRun  ArchiveResult
-	verifyRun   VerifyResult
-	recent      []DownloadResult
-	deletePlan  DeletePlan
-	errorNote   string
+	// selection nil keeps the folder's saved selection; set once chosen here.
+	selection    *Selection
+	selectInputs [selectFieldCount]textinput.Model
+	selectFocus  int
+	selectErr    error
+	cancel       context.CancelFunc
+	events       <-chan archiveMessage
+	archiveRun   ArchiveResult
+	verifyRun    VerifyResult
+	recent       []DownloadResult
+	deletePlan   DeletePlan
+	errorNote    string
 }
 
 func newTUIModel(ctx context.Context, version string, demo bool) tuiModel {
@@ -101,19 +114,32 @@ func newTUIModel(ctx context.Context, version string, demo bool) tuiModel {
 	deleteInput := textinput.New()
 	deleteInput.Prompt = "Type DELETE  "
 	deleteInput.CharLimit = len("DELETE")
+	var selectInputs [selectFieldCount]textinput.Model
+	for index, field := range []struct{ prompt, placeholder string }{
+		{"From   ", "YYYY-MM-DD or YYYY-MM-DD HH:MM"},
+		{"To     ", "same format, included"},
+		{"Types  ", "all types, or e.g. Video,TimeLapseVideo"},
+	} {
+		selectInputs[index] = textinput.New()
+		selectInputs[index].Prompt = field.prompt
+		selectInputs[index].Placeholder = field.placeholder
+		selectInputs[index].CharLimit = 200
+		selectInputs[index].SetWidth(48)
+	}
 	archive, _ := NewArchive(defaultArchiveRoot())
 	model := tuiModel{
-		ctx:         ctx,
-		version:     version,
-		demo:        demo,
-		screen:      screenHome,
-		archiveRoot: defaultArchiveRoot(),
-		envPath:     defaultEnvFile(),
-		archive:     archive,
-		spinner:     spin,
-		progress:    bar,
-		pathInput:   input,
-		deleteInput: deleteInput,
+		selectInputs: selectInputs,
+		ctx:          ctx,
+		version:      version,
+		demo:         demo,
+		screen:       screenHome,
+		archiveRoot:  defaultArchiveRoot(),
+		envPath:      defaultEnvFile(),
+		archive:      archive,
+		spinner:      spin,
+		progress:     bar,
+		pathInput:    input,
+		deleteInput:  deleteInput,
 	}
 	if _, _, err := loadCredentials(model.envPath); err == nil {
 		model.connected = true
@@ -268,6 +294,7 @@ func (m *tuiModel) beginArchive() tea.Cmd {
 		LegacyState: defaultLegacyState(),
 		Parallel:    8,
 		PerPage:     100,
+		Selection:   m.selection,
 	}, m.demo)
 	return waitArchiveMessage(m.events)
 }
@@ -301,10 +328,16 @@ func (m tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.dark = msg.IsDark()
 		m.pathInput.SetStyles(textinput.DefaultStyles(m.dark))
 		m.deleteInput.SetStyles(textinput.DefaultStyles(m.dark))
+		for index := range m.selectInputs {
+			m.selectInputs[index].SetStyles(textinput.DefaultStyles(m.dark))
+		}
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.progress.SetWidth(max(20, min(72, msg.Width-12)))
 		m.pathInput.SetWidth(max(20, min(72, msg.Width-20)))
+		for index := range m.selectInputs {
+			m.selectInputs[index].SetWidth(max(20, min(60, msg.Width-20)))
+		}
 	case spinner.TickMsg:
 		var command tea.Cmd
 		m.spinner, command = m.spinner.Update(msg)
@@ -426,7 +459,7 @@ func (m tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				inspection := demoLibraryInspection(root)
 				m.inspection = &inspection
 			} else if m.inspection != nil {
-				inspection, planErr := ReplanLibrary(root, *m.inspection)
+				inspection, planErr := SelectLibrary(root, *m.inspection, m.selection)
 				if planErr != nil {
 					m.err, m.screen = planErr, screenError
 					return m, nil
@@ -440,6 +473,9 @@ func (m tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		var command tea.Cmd
 		m.pathInput, command = m.pathInput.Update(message)
 		return m, command
+	}
+	if m.screen == screenSelection {
+		return m.updateSelection(message, stroke)
 	}
 	if m.screen == screenDeleteConfirm && !m.busy {
 		switch stroke {
@@ -524,6 +560,10 @@ func (m tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.pathInput.CursorEnd()
 			m.pathInput.Focus()
 			m.screen = screenPath
+		case "s":
+			if m.inspection != nil {
+				m.openSelection()
+			}
 		case "esc", "b":
 			m.screen, m.cursor = screenHome, 0
 		}
@@ -566,6 +606,100 @@ func (m tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, tea.Batch(commands...)
+}
+
+// openSelection fills the selection fields from the library's current selection.
+func (m *tuiModel) openSelection() {
+	current := m.inspection.Selection
+	m.selectInputs[selectFrom].SetValue(current.From)
+	m.selectInputs[selectTo].SetValue(current.To)
+	m.selectInputs[selectTypes].SetValue(strings.Join(current.Types, ","))
+	for index := range m.selectInputs {
+		m.selectInputs[index].CursorEnd()
+	}
+	m.selectErr = nil
+	m.focusSelection(selectFrom)
+	m.screen = screenSelection
+}
+
+func (m *tuiModel) focusSelection(field int) {
+	m.selectFocus = (field + selectFieldCount) % selectFieldCount
+	for index := range m.selectInputs {
+		if index == m.selectFocus {
+			m.selectInputs[index].Focus()
+		} else {
+			m.selectInputs[index].Blur()
+		}
+	}
+}
+
+// selectionZone keeps the zone of an existing date selection, such as one made
+// with --tz or --camera-clock, and otherwise follows gopro.com on this computer.
+func (m tuiModel) selectionZone() string {
+	if m.inspection != nil {
+		if current := m.inspection.Selection; current.From != "" || current.To != "" {
+			return current.Zone
+		}
+	}
+	return localZoneName()
+}
+
+func (m tuiModel) updateSelection(message tea.Msg, stroke string) (tea.Model, tea.Cmd) {
+	switch stroke {
+	case "esc":
+		m.selectInputs[m.selectFocus].Blur()
+		m.selectErr = nil
+		m.screen = screenLibrary
+		return m, nil
+	case "tab", "down":
+		m.focusSelection(m.selectFocus + 1)
+		return m, nil
+	case "shift+tab", "up":
+		m.focusSelection(m.selectFocus - 1)
+		return m, nil
+	case "enter":
+		selection, err := ParseSelection(m.selectInputs[selectFrom].Value(), m.selectInputs[selectTo].Value(), m.selectInputs[selectTypes].Value(), m.selectionZone())
+		if err != nil {
+			m.selectErr = err
+			return m, nil
+		}
+		if m.demo {
+			m.selectErr = errors.New("the demo has no media to choose from; connect GoPro to choose dates")
+			return m, nil
+		}
+		inspection, err := SelectLibrary(m.archiveRoot, *m.inspection, &selection)
+		if err != nil {
+			m.selectErr = err
+			return m, nil
+		}
+		if inspection.Total == 0 {
+			m.selectErr = fmt.Errorf("no GoPro media matches %s", selection)
+			return m, nil
+		}
+		m.selection, m.inspection, m.selectErr = &selection, &inspection, nil
+		m.selectInputs[m.selectFocus].Blur()
+		m.screen = screenLibrary
+		return m, nil
+	}
+	var command tea.Cmd
+	m.selectInputs[m.selectFocus], command = m.selectInputs[m.selectFocus].Update(message)
+	return m, command
+}
+
+// selectionChange describes how archiving would change the folder's saved
+// selection, or returns "" when it stays the same.
+func (m tuiModel) selectionChange() string {
+	if m.selection == nil || m.archive == nil || !m.archive.Exists {
+		return ""
+	}
+	saved := Selection{}
+	if m.archive.Data.Selection != nil {
+		saved = *m.archive.Data.Selection
+	}
+	if saved.Equal(*m.selection) {
+		return ""
+	}
+	return fmt.Sprintf("This folder's selection changes from %s to %s. Files already saved stay.", saved, *m.selection)
 }
 
 func (m tuiModel) View() tea.View {

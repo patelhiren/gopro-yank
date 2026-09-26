@@ -63,6 +63,8 @@ func (m tuiModel) render() string {
 		body = m.renderDeleteConfirm(styles)
 	case screenError:
 		body = m.renderError(styles)
+	case screenSelection:
+		body = m.renderSelection(styles)
 	}
 	if m.busy && m.screen != screenProgress {
 		body += "\n\n" + styles.action.Render(m.spinner.View()+" "+m.busyText)
@@ -76,6 +78,8 @@ func (m tuiModel) render() string {
 		footer = "↑/↓ move   enter choose   q quit"
 	} else if m.screen == screenPath {
 		footer = "enter save folder   esc cancel"
+	} else if m.screen == screenSelection {
+		footer = "tab / ↑↓ move   enter apply   esc cancel"
 	} else if m.screen == screenDeleteConfirm && !m.busy {
 		footer = "enter delete local archive   esc cancel"
 	} else if m.busy {
@@ -127,8 +131,11 @@ func (m tuiModel) renderLibrary(styles tuiStyles) string {
 	lines := []string{
 		styles.section.Render("GOPRO LIBRARY"),
 		styles.primary.Render(fmt.Sprintf("%d originals · %s%s", i.Total, humanBytes(i.TotalBytes), dateRange)),
-		"",
 	}
+	if !i.Selection.IsEmpty() {
+		lines = append(lines, styles.action.Render("Selected: "+i.Selection.String())+styles.muted.Render(fmt.Sprintf(" · %d others not selected", i.Unselected)))
+	}
+	lines = append(lines, "")
 	for _, name := range sortedTypeNames(i.Types) {
 		lines = append(lines, fmt.Sprintf("%-22s %6d", name, i.Types[name]))
 	}
@@ -142,7 +149,7 @@ func (m tuiModel) renderLibrary(styles tuiStyles) string {
 		"",
 		styles.good.Render("Nothing was downloaded."),
 		"",
-		styles.action.Render("enter")+" archive this library    "+styles.action.Render("e")+" change folder    "+styles.muted.Render("esc back"),
+		styles.action.Render("enter")+" archive    "+styles.action.Render("s")+" choose media    "+styles.action.Render("e")+" change folder    "+styles.muted.Render("esc back"),
 	)
 	return strings.Join(lines, "\n")
 }
@@ -163,11 +170,48 @@ func (m tuiModel) renderConfirm(styles tuiStyles) string {
 		fmt.Sprintf("Download size           %s", humanBytes(i.RemainingBytes)),
 		fmt.Sprintf("Space available         %s", available),
 		fmt.Sprintf("Folder                  %s", m.archiveRoot),
+		fmt.Sprintf("Selection               %s", i.Selection),
+	}
+	if change := m.selectionChange(); change != "" {
+		lines = append(lines, "", styles.warning.Render(change))
+	}
+	lines = append(lines,
 		"",
 		styles.primary.Render("GoPro Yank will download and verify every available original."),
 		styles.good.Render("It never deletes cloud or archived media."),
 		"",
-		styles.action.Render("enter") + " start archiving    " + styles.action.Render("e") + " change folder    " + styles.muted.Render("esc cancel"),
+		styles.action.Render("enter")+" start archiving    "+styles.action.Render("e")+" change folder    "+styles.muted.Render("esc cancel"),
+	)
+	return strings.Join(lines, "\n")
+}
+
+func (m tuiModel) renderSelection(styles tuiStyles) string {
+	zone := m.selectionZone()
+	dates := "Dates as gopro.com shows them in " + zone + "."
+	if zone == "" {
+		dates = "Dates follow the camera's own clock."
+	}
+	lines := []string{
+		styles.section.Render("CHOOSE MEDIA"),
+		"",
+		m.selectInputs[selectFrom].View(),
+		m.selectInputs[selectTo].View(),
+		m.selectInputs[selectTypes].View(),
+		"",
+		styles.muted.Render(dates),
+		styles.muted.Render("To includes the whole day or minute. Leave everything empty for the whole library."),
+	}
+	if m.inspection != nil {
+		types := map[string]int{}
+		for _, item := range m.inspection.library {
+			types[item.MediaType]++
+		}
+		if len(types) > 0 {
+			lines = append(lines, styles.muted.Render("Types in your library: "+strings.Join(sortedTypeNames(types), ", ")))
+		}
+	}
+	if m.selectErr != nil {
+		lines = append(lines, "", styles.bad.Render(m.selectErr.Error()))
 	}
 	return strings.Join(lines, "\n")
 }
