@@ -99,7 +99,7 @@ gopro-yank delete --out ~/Movies/tahoe
 ```
 
 `delete` asks you to type `DELETE` and, like the app, removes only the files it
-recorded.
+recorded. In the app, press `s` on the library screen to choose dates and types.
 
 Run `gopro-yank <command> --help` for options. On a computer without a browser,
 use `gopro-yank login --no-browser`. Environment-based setups can start from
