@@ -626,7 +626,10 @@ func (m *tuiModel) openSelection() {
 	}
 	m.typeCounts = map[string]int{}
 	for _, item := range m.inspection.library {
-		m.typeCounts[item.MediaType]++
+		// Edits never download, so they are not offered as a type to choose.
+		if item.MediaType != "MultiClipEdit" {
+			m.typeCounts[item.MediaType]++
+		}
 	}
 	m.typeChecked = map[string]bool{}
 	for _, kind := range current.Types {
@@ -676,9 +679,15 @@ func (m tuiModel) checkedTypes() string {
 	return strings.Join(checked, ",")
 }
 
-// suggestedFolder names a folder beside current for selection, such as
+// selectionFoldersRoot holds the folders suggested for selections.
+func selectionFoldersRoot() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, "GoPro")
+}
+
+// suggestedFolder names a folder in parent for selection, such as
 // gopro-2026-08-24-to-2026-08-30-video.
-func suggestedFolder(current string, selection Selection) string {
+func suggestedFolder(parent string, selection Selection) string {
 	dates := strings.NewReplacer("T", "-", " ", "-", ":", "")
 	parts := []string{"gopro"}
 	switch {
@@ -697,7 +706,7 @@ func suggestedFolder(current string, selection Selection) string {
 			return -1
 		}, strings.ToLower(kind)))
 	}
-	return filepath.Join(filepath.Dir(current), strings.Join(parts, "-"))
+	return filepath.Join(parent, strings.Join(parts, "-"))
 }
 
 // folderMatches reports whether the current folder already holds this selection.
@@ -761,7 +770,7 @@ func (m tuiModel) updateSelection(message tea.Msg, stroke string) (tea.Model, te
 		}
 		m.screen = screenLibrary
 		if !selection.IsEmpty() && !m.folderMatches(selection) {
-			m.pathInput.SetValue(suggestedFolder(m.archiveRoot, selection))
+			m.pathInput.SetValue(suggestedFolder(selectionFoldersRoot(), selection))
 			m.pathInput.CursorEnd()
 			m.pathInput.Err = nil
 			m.pathInput.Focus()

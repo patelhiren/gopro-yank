@@ -150,7 +150,8 @@ var (
 // tripLibraryModel is a TUI showing the trip library as read from a local GoPro API.
 func tripLibraryModel(t *testing.T) tuiModel {
 	t.Helper()
-	newFakeGoPro(t, tripLibrary())
+	t.Setenv("HOME", t.TempDir())
+	newFakeGoPro(t, append(tripLibrary(), map[string]any{"id": "trip-edit", "filename": "", "captured_at": "2026-09-13T12:00:00Z", "type": "MultiClipEdit"}))
 	envPath := writeTestEnv(t)
 	root := filepath.Join(t.TempDir(), "vlog")
 	inspection, err := InspectLibrary(context.Background(), root, envPath, 100, nil)
@@ -167,7 +168,7 @@ func tripLibraryModel(t *testing.T) tuiModel {
 
 func TestSelectionScreenFiltersLibraryWithoutDownloading(t *testing.T) {
 	model := tripLibraryModel(t)
-	if model.inspection.Total != 5 {
+	if model.inspection.Total != 6 {
 		t.Fatalf("unexpected library: %+v", model.inspection)
 	}
 	model = pressKeys(t, model, tea.KeyPressMsg(tea.Key{Code: 's', Text: "s"}))
@@ -180,6 +181,9 @@ func TestSelectionScreenFiltersLibraryWithoutDownloading(t *testing.T) {
 			t.Fatalf("selection screen does not contain %q:\n%s", expected, view)
 		}
 	}
+	if strings.Contains(view, "MultiClipEdit") || len(model.typeOptions) != 3 {
+		t.Fatalf("edits are offered as a type to choose:\n%s", view)
+	}
 
 	model = typeText(t, model, "2026-09-12")
 	model = pressKeys(t, model, keyTab)
@@ -189,12 +193,11 @@ func TestSelectionScreenFiltersLibraryWithoutDownloading(t *testing.T) {
 	if view := model.View().Content; !strings.Contains(view, "[x] Video") || !strings.Contains(view, "[ ] TimeLapseVideo") {
 		t.Fatalf("type checkboxes did not toggle:\n%s", view)
 	}
-	original := model.archiveRoot
 	model = pressKeys(t, model, keyEnter)
 	if model.screen != screenPath || model.selectErr != nil {
 		t.Fatalf("applying a selection did not suggest a folder: screen=%v err=%v", model.screen, model.selectErr)
 	}
-	suggested := filepath.Join(filepath.Dir(original), "gopro-2026-09-12-to-2026-09-14-video")
+	suggested := filepath.Join(selectionFoldersRoot(), "gopro-2026-09-12-to-2026-09-14-video")
 	if model.pathInput.Value() != suggested || !strings.Contains(model.View().Content, "Suggested a new folder") {
 		t.Fatalf("unexpected folder suggestion %q", model.pathInput.Value())
 	}
@@ -205,10 +208,10 @@ func TestSelectionScreenFiltersLibraryWithoutDownloading(t *testing.T) {
 	if model.selection == nil || model.selection.From != "2026-09-12" || model.selection.Zone == "" {
 		t.Fatalf("unexpected selection: %+v", model.selection)
 	}
-	if model.inspection.Total != 1 || model.inspection.Unselected != 4 || model.inspection.Remaining != 1 {
+	if model.inspection.Total != 1 || model.inspection.Unselected != 5 || model.inspection.Remaining != 1 {
 		t.Fatalf("library was not filtered: %+v", model.inspection)
 	}
-	if view := model.View().Content; !strings.Contains(view, "Selected: 2026-09-12 to 2026-09-14") || !strings.Contains(view, "4 others not selected") {
+	if view := model.View().Content; !strings.Contains(view, "Selected: 2026-09-12 to 2026-09-14") || !strings.Contains(view, "5 others not selected") {
 		t.Fatalf("library view does not show the selection:\n%s", view)
 	}
 	if _, err := os.Stat(model.archiveRoot); !os.IsNotExist(err) {
@@ -228,7 +231,7 @@ func TestSelectionScreenFiltersLibraryWithoutDownloading(t *testing.T) {
 	if model.screen != screenLibrary || model.archiveRoot != suggested {
 		t.Fatalf("whole library suggested a folder: screen=%v root=%s", model.screen, model.archiveRoot)
 	}
-	if model.inspection.Total != 5 || model.selection == nil || !model.selection.IsEmpty() {
+	if model.inspection.Total != 6 || model.selection == nil || !model.selection.IsEmpty() {
 		t.Fatalf("clearing did not select the whole library: %+v %+v", model.inspection, model.selection)
 	}
 }
@@ -252,7 +255,7 @@ func TestSelectionScreenKeepsBadInputOnScreen(t *testing.T) {
 	}
 
 	model = pressKeys(t, model, keyEsc)
-	if model.screen != screenLibrary || model.selection != nil || model.inspection.Total != 5 {
+	if model.screen != screenLibrary || model.selection != nil || model.inspection.Total != 6 {
 		t.Fatalf("esc changed the selection: screen=%v selection=%+v", model.screen, model.selection)
 	}
 }
@@ -308,8 +311,7 @@ func TestChangingFolderUsesItsSavedSelection(t *testing.T) {
 }
 
 func TestSuggestedFolderNames(t *testing.T) {
-	parent := filepath.Join("Users", "me", "Pictures")
-	current := filepath.Join(parent, "GoPro")
+	parent := filepath.Join("Users", "me", "GoPro")
 	for want, selection := range map[string]Selection{
 		"gopro-2026-08-24-to-2026-08-30":             {From: "2026-08-24", To: "2026-08-30"},
 		"gopro-2026-08-24-0800-to-2026-08-24-2200":   {From: "2026-08-24T08:00", To: "2026-08-24 22:00"},
@@ -317,7 +319,7 @@ func TestSuggestedFolderNames(t *testing.T) {
 		"gopro-through-2026-08-30":                   {To: "2026-08-30"},
 		"gopro-photo":                                {Types: []string{"Photo"}},
 	} {
-		if got := suggestedFolder(current, selection); got != filepath.Join(parent, want) {
+		if got := suggestedFolder(parent, selection); got != filepath.Join(parent, want) {
 			t.Errorf("suggestedFolder(%+v) = %s, want %s", selection, got, want)
 		}
 	}
