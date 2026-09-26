@@ -38,6 +38,8 @@ type ArchiveOptions struct {
 	IgnoreSpaceCheck bool
 	// Selection nil keeps the archive's saved selection; an empty one selects everything.
 	Selection *Selection
+	// Layout is date or nested; empty keeps the folder's layout, or picks one for a new folder.
+	Layout string
 }
 
 type ArchiveEvent struct {
@@ -200,6 +202,9 @@ func validateArchiveOptions(options ArchiveOptions) error {
 	if options.Parallel < 1 || options.PerPage < 1 || options.PerPage > 100 {
 		return errors.New("parallel must be positive and per-page must be 1–100")
 	}
+	if _, err := parseLayout(options.Layout); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -232,6 +237,9 @@ func ArchiveLibrary(ctx context.Context, options ArchiveOptions, emit func(Archi
 	}
 	selection := resolveSelection(archive, options.Selection)
 	archive.SetSelection(selection)
+	if err := archive.chooseLayout(options.Layout, selection); err != nil {
+		return result, err
+	}
 	items, err := saveSourceSnapshot(ctx, client, archive, user, options.PerPage, emit)
 	if err != nil {
 		return result, err

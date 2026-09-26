@@ -90,6 +90,7 @@ type Manifest struct {
 	Items          map[string]*ItemRecord `json:"items"`
 	LegacyAdoption map[string]any         `json:"legacy_adoption,omitempty"`
 	Selection      *Selection             `json:"selection,omitempty"`
+	Layout         string                 `json:"layout,omitempty"`
 }
 
 type Archive struct {
@@ -103,6 +104,8 @@ type Archive struct {
 	Exists        bool
 	Data          Manifest
 	mu            sync.RWMutex
+	// placeMu serializes choosing and claiming file names in shared date folders.
+	placeMu sync.Mutex
 }
 
 type VerificationResult struct {

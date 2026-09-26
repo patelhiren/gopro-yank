@@ -61,6 +61,7 @@ Usage:
   gopro-yank archive [options]  Archive or resume available originals
   gopro-yank verify [options]   Check every archived file
   gopro-yank delete --out DIR   Delete a local archive folder's saved files
+  gopro-yank reorganize --out DIR  Move saved files into per-date folders
 
 Account:
   gopro-yank login [options]    Connect without the interactive app
@@ -242,12 +243,16 @@ func archiveCommand(ctx context.Context, args []string) error {
 	parallel := flags.Int("parallel", 8, "downloads to run at once")
 	perPage := flags.Int("per-page", 100, "GoPro items requested at once")
 	ignoreSpace := flags.Bool("ignore-space-check", false, "continue when the disk-space check fails")
+	layout := flags.String("layout", "", "date: one folder per day; nested: one folder per original (default: date for a selection)")
 	selectFlags := addSelectionFlags(flags)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	selection, err := selectFlags.selection()
 	if err != nil {
+		return exitError{2, err}
+	}
+	if _, err := parseLayout(*layout); err != nil {
 		return exitError{2, err}
 	}
 	lastStage := ""
@@ -259,6 +264,7 @@ func archiveCommand(ctx context.Context, args []string) error {
 		PerPage:          *perPage,
 		IgnoreSpaceCheck: *ignoreSpace,
 		Selection:        selection,
+		Layout:           *layout,
 	}, func(event ArchiveEvent) {
 		if event.Stage != "" && event.Stage != lastStage {
 			fmt.Println(event.Stage + "...")
@@ -457,6 +463,28 @@ func deleteCommand(ctx context.Context, args []string, input io.Reader) error {
 	return nil
 }
 
+func reorganizeCommand(ctx context.Context, args []string) error {
+	flags := flag.NewFlagSet("reorganize", flag.ContinueOnError)
+	out := flags.String("out", "", "archive folder to reorganize (required)")
+	layout := flags.String("layout", layoutDate, "date: one folder per day; nested: one folder per original")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *out == "" {
+		return exitError{2, errors.New("reorganize needs --out with the archive folder")}
+	}
+	if _, err := parseLayout(*layout); err != nil || *layout == "" {
+		return exitError{2, fmt.Errorf("unknown layout %q; use date or nested", *layout)}
+	}
+	result, err := ReorganizeArchive(ctx, *out, *layout)
+	fmt.Printf("Moved %d of %d file(s) into the %s layout\n", result.Moved, result.Files, result.Layout)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Next: gopro-yank verify --out %s\n", *out)
+	return nil
+}
+
 func run(ctx context.Context, args []string, version string) error {
 	if len(args) == 0 {
 		if terminalIsInteractive() {
@@ -487,6 +515,8 @@ func run(ctx context.Context, args []string, version string) error {
 		return loginCommand(ctx, args[1:])
 	case "delete":
 		return deleteCommand(ctx, args[1:], os.Stdin)
+	case "reorganize":
+		return reorganizeCommand(ctx, args[1:])
 	// Compatibility aliases and advanced archive tools remain scriptable.
 	case "pull":
 		return pullCommand(ctx, args[1:])

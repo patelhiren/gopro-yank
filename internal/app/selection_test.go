@@ -227,7 +227,13 @@ func newFakeGoPro(t *testing.T, media []map[string]any) *fakeGoPro {
 			fake.mu.Lock()
 			fake.downloads = append(fake.downloads, id)
 			fake.mu.Unlock()
-			_, _ = writer.Write(zipBytes(t, map[string][]byte{byID[id]["filename"].(string): []byte("payload-" + id)}))
+			members := map[string][]byte{byID[id]["filename"].(string): []byte("payload-" + id)}
+			if chapters, ok := byID[id]["chapters"].([]string); ok {
+				for _, chapter := range chapters {
+					members[chapter] = []byte("chapter-" + chapter + "-" + id)
+				}
+			}
+			_, _ = writer.Write(zipBytes(t, members))
 		case strings.HasPrefix(request.URL.Path, "/media/"):
 			id := strings.TrimPrefix(request.URL.Path, "/media/")
 			fake.mu.Lock()
