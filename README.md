@@ -98,6 +98,12 @@ gopro-yank archive --out ~/Movies/tahoe --from 2026-09-12T08:00 --to 2026-09-14T
 gopro-yank delete --out ~/Movies/tahoe
 ```
 
+A folder made for a selection puts files straight into one folder per day,
+such as `2026-08-24/GX011059.MP4`, instead of `originals/`. `--layout` picks
+`date` or `nested` for a new folder, and
+`gopro-yank reorganize --out ~/GoPro/tahoe` moves an existing one to per-day
+folders without downloading again.
+
 `delete` asks you to type `DELETE` and, like the app, removes only the files it
 recorded. In the app, press `s` on the library screen to choose dates and types;
 it suggests a folder for the selection in `~/GoPro`.
