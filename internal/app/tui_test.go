@@ -143,6 +143,8 @@ var (
 	keyEnter = tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})
 	keyTab   = tea.KeyPressMsg(tea.Key{Code: tea.KeyTab})
 	keyEsc   = tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape})
+	keySpace = tea.KeyPressMsg(tea.Key{Code: tea.KeySpace, Text: " "})
+	keyUp    = tea.KeyPressMsg(tea.Key{Code: tea.KeyUp})
 )
 
 // tripLibraryModel is a TUI showing the trip library as read from a local GoPro API.
@@ -173,7 +175,7 @@ func TestSelectionScreenFiltersLibraryWithoutDownloading(t *testing.T) {
 		t.Fatalf("s did not open the selection screen: %v", model.screen)
 	}
 	view := model.View().Content
-	for _, expected := range []string{"CHOOSE MEDIA", "gopro.com", "Types in your library: Photo, TimeLapseVideo, Video"} {
+	for _, expected := range []string{"CHOOSE MEDIA", "gopro.com", "[ ] Photo", "[ ] TimeLapseVideo", "[ ] Video", "none checked = all types"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("selection screen does not contain %q:\n%s", expected, view)
 		}
@@ -182,11 +184,23 @@ func TestSelectionScreenFiltersLibraryWithoutDownloading(t *testing.T) {
 	model = typeText(t, model, "2026-09-12")
 	model = pressKeys(t, model, keyTab)
 	model = typeText(t, model, "2026-09-14")
-	model = pressKeys(t, model, keyTab)
-	model = typeText(t, model, "video")
+	// Tab past Photo and TimeLapseVideo to Video, check it, then check and uncheck TimeLapseVideo.
+	model = pressKeys(t, model, keyTab, keyTab, keyTab, keySpace, keyUp, keySpace, keySpace)
+	if view := model.View().Content; !strings.Contains(view, "[x] Video") || !strings.Contains(view, "[ ] TimeLapseVideo") {
+		t.Fatalf("type checkboxes did not toggle:\n%s", view)
+	}
+	original := model.archiveRoot
 	model = pressKeys(t, model, keyEnter)
-	if model.screen != screenLibrary || model.selectErr != nil {
-		t.Fatalf("selection was not applied: screen=%v err=%v", model.screen, model.selectErr)
+	if model.screen != screenPath || model.selectErr != nil {
+		t.Fatalf("applying a selection did not suggest a folder: screen=%v err=%v", model.screen, model.selectErr)
+	}
+	suggested := filepath.Join(filepath.Dir(original), "gopro-2026-09-12-to-2026-09-14-video")
+	if model.pathInput.Value() != suggested || !strings.Contains(model.View().Content, "Suggested a new folder") {
+		t.Fatalf("unexpected folder suggestion %q", model.pathInput.Value())
+	}
+	model = pressKeys(t, model, keyEnter)
+	if model.screen != screenLibrary || model.archiveRoot != suggested {
+		t.Fatalf("suggested folder was not used: screen=%v root=%s", model.screen, model.archiveRoot)
 	}
 	if model.selection == nil || model.selection.From != "2026-09-12" || model.selection.Zone == "" {
 		t.Fatalf("unexpected selection: %+v", model.selection)
@@ -203,10 +217,17 @@ func TestSelectionScreenFiltersLibraryWithoutDownloading(t *testing.T) {
 
 	// Clearing every field returns to the whole library.
 	model = pressKeys(t, model, tea.KeyPressMsg(tea.Key{Code: 's', Text: "s"}))
+	if !model.typeChecked["Video"] {
+		t.Fatal("reopening did not keep the checked type")
+	}
 	for index := range model.selectInputs {
 		model.selectInputs[index].SetValue("")
 	}
+	model.typeChecked = map[string]bool{}
 	model = pressKeys(t, model, keyEnter)
+	if model.screen != screenLibrary || model.archiveRoot != suggested {
+		t.Fatalf("whole library suggested a folder: screen=%v root=%s", model.screen, model.archiveRoot)
+	}
 	if model.inspection.Total != 5 || model.selection == nil || !model.selection.IsEmpty() {
 		t.Fatalf("clearing did not select the whole library: %+v %+v", model.inspection, model.selection)
 	}
@@ -252,8 +273,17 @@ func TestConfirmWarnsWhenFolderSelectionChanges(t *testing.T) {
 	}
 
 	model = pressKeys(t, model, tea.KeyPressMsg(tea.Key{Code: 's', Text: "s"}))
-	model.selectInputs[selectTypes].SetValue("Video")
-	model = pressKeys(t, model, keyEnter, keyEnter)
+	if !model.typeChecked["Photo"] {
+		t.Fatal("the folder's saved type was not checked")
+	}
+	// Uncheck Photo (first type) and check Video (third).
+	model = pressKeys(t, model, keyTab, keyTab, keySpace, keyTab, keyTab, keySpace)
+	// Keep the current folder instead of the suggestion, then continue to confirmation.
+	model = pressKeys(t, model, keyEnter, keyEsc)
+	if model.screen != screenLibrary {
+		t.Fatalf("esc on the suggestion did not return to the library: %v", model.screen)
+	}
+	model = pressKeys(t, model, keyEnter)
 	if model.screen != screenConfirm {
 		t.Fatalf("expected confirmation, got %v", model.screen)
 	}
@@ -274,5 +304,33 @@ func TestChangingFolderUsesItsSavedSelection(t *testing.T) {
 	model = pressKeys(t, model, keyEnter)
 	if model.screen != screenLibrary || model.inspection.Total != 1 || len(model.inspection.Selection.Types) != 1 {
 		t.Fatalf("folder change ignored its saved selection: %+v", model.inspection)
+	}
+}
+
+func TestSuggestedFolderNames(t *testing.T) {
+	parent := filepath.Join("Users", "me", "Pictures")
+	current := filepath.Join(parent, "GoPro")
+	for want, selection := range map[string]Selection{
+		"gopro-2026-08-24-to-2026-08-30":             {From: "2026-08-24", To: "2026-08-30"},
+		"gopro-2026-08-24-0800-to-2026-08-24-2200":   {From: "2026-08-24T08:00", To: "2026-08-24 22:00"},
+		"gopro-from-2026-08-24-video-timelapsevideo": {From: "2026-08-24", Types: []string{"Video", "TimeLapseVideo"}},
+		"gopro-through-2026-08-30":                   {To: "2026-08-30"},
+		"gopro-photo":                                {Types: []string{"Photo"}},
+	} {
+		if got := suggestedFolder(current, selection); got != filepath.Join(parent, want) {
+			t.Errorf("suggestedFolder(%+v) = %s, want %s", selection, got, want)
+		}
+	}
+}
+
+func TestNoFolderSuggestionWhenFolderAlreadyMatches(t *testing.T) {
+	model := tripLibraryModel(t)
+	if err := archiveCommand(context.Background(), archiveArgs(model.archiveRoot, model.envPath, "-type", "Photo")); err != nil {
+		t.Fatal(err)
+	}
+	model.reloadArchive()
+	model = pressKeys(t, model, tea.KeyPressMsg(tea.Key{Code: 's', Text: "s"}), keyEnter)
+	if model.screen != screenLibrary {
+		t.Fatalf("re-applying the folder's own selection suggested another folder: %v", model.screen)
 	}
 }

@@ -79,7 +79,7 @@ func (m tuiModel) render() string {
 	} else if m.screen == screenPath {
 		footer = "enter save folder   esc cancel"
 	} else if m.screen == screenSelection {
-		footer = "tab / ↑↓ move   enter apply   esc cancel"
+		footer = "tab / ↑↓ move   space check type   enter apply   esc cancel"
 	} else if m.screen == screenDeleteConfirm && !m.busy {
 		footer = "enter delete local archive   esc cancel"
 	} else if m.busy {
@@ -196,20 +196,24 @@ func (m tuiModel) renderSelection(styles tuiStyles) string {
 		"",
 		m.selectInputs[selectFrom].View(),
 		m.selectInputs[selectTo].View(),
-		m.selectInputs[selectTypes].View(),
+		styles.muted.Render(dates + " To includes the whole day or minute."),
 		"",
-		styles.muted.Render(dates),
-		styles.muted.Render("To includes the whole day or minute. Leave everything empty for the whole library."),
+		styles.section.Render("TYPES") + styles.muted.Render("  none checked = all types"),
 	}
-	if m.inspection != nil {
-		types := map[string]int{}
-		for _, item := range m.inspection.library {
-			types[item.MediaType]++
+	for index, name := range m.typeOptions {
+		box := "[ ]"
+		if m.typeChecked[name] {
+			box = "[x]"
 		}
-		if len(types) > 0 {
-			lines = append(lines, styles.muted.Render("Types in your library: "+strings.Join(sortedTypeNames(types), ", ")))
+		line := fmt.Sprintf("%s %-18s %6d", box, name, m.typeCounts[name])
+		if index+selectFieldCount == m.selectFocus {
+			line = styles.selected.Render("› " + line)
+		} else {
+			line = "  " + styles.primary.Render(line)
 		}
+		lines = append(lines, line)
 	}
+	lines = append(lines, "", styles.muted.Render("Leave dates empty and nothing checked for the whole library."))
 	if m.selectErr != nil {
 		lines = append(lines, "", styles.bad.Render(m.selectErr.Error()))
 	}
@@ -220,6 +224,9 @@ func (m tuiModel) renderPath(styles tuiStyles) string {
 	message := styles.section.Render("WHERE SHOULD THE ARCHIVE LIVE?") + "\n\n" + m.pathInput.View()
 	if m.pathInput.Err != nil {
 		message += "\n\n" + styles.bad.Render(m.pathInput.Err.Error())
+	}
+	if m.pathNote != "" {
+		message += "\n\n" + styles.primary.Render(m.pathNote)
 	}
 	message += "\n\n" + styles.muted.Render("Use a local folder or mounted external drive.")
 	return message

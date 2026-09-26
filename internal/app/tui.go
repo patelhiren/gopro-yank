@@ -30,10 +30,10 @@ const (
 	screenSelection
 )
 
+// The selection screen has two date fields followed by one checkbox per media type.
 const (
 	selectFrom = iota
 	selectTo
-	selectTypes
 	selectFieldCount
 )
 
@@ -90,6 +90,10 @@ type tuiModel struct {
 	selectInputs [selectFieldCount]textinput.Model
 	selectFocus  int
 	selectErr    error
+	typeOptions  []string
+	typeCounts   map[string]int
+	typeChecked  map[string]bool
+	pathNote     string
 	cancel       context.CancelFunc
 	events       <-chan archiveMessage
 	archiveRun   ArchiveResult
@@ -118,7 +122,6 @@ func newTUIModel(ctx context.Context, version string, demo bool) tuiModel {
 	for index, field := range []struct{ prompt, placeholder string }{
 		{"From   ", "YYYY-MM-DD or YYYY-MM-DD HH:MM"},
 		{"To     ", "same format, included"},
-		{"Types  ", "all types, or e.g. Video,TimeLapseVideo"},
 	} {
 		selectInputs[index] = textinput.New()
 		selectInputs[index].Prompt = field.prompt
@@ -445,6 +448,7 @@ func (m tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		switch stroke {
 		case "esc":
 			m.pathInput.Blur()
+			m.pathNote = ""
 			m.screen = screenLibrary
 			return m, nil
 		case "enter":
@@ -455,6 +459,7 @@ func (m tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.archiveRoot = root
 			m.pathInput.Blur()
+			m.pathNote = ""
 			if m.demo {
 				inspection := demoLibraryInspection(root)
 				m.inspection = &inspection
@@ -556,6 +561,7 @@ func (m tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.screen = screenConfirm
 			}
 		case "e":
+			m.pathNote = ""
 			m.pathInput.SetValue(m.archiveRoot)
 			m.pathInput.CursorEnd()
 			m.pathInput.Focus()
@@ -572,6 +578,7 @@ func (m tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter", "a":
 			commands = append(commands, m.beginArchive())
 		case "e":
+			m.pathNote = ""
 			m.pathInput.SetValue(m.archiveRoot)
 			m.pathInput.CursorEnd()
 			m.pathInput.Focus()
@@ -608,22 +615,40 @@ func (m tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(commands...)
 }
 
-// openSelection fills the selection fields from the library's current selection.
+// openSelection fills the selection fields from the library's current selection
+// and lists every media type in the library as a checkbox.
 func (m *tuiModel) openSelection() {
 	current := m.inspection.Selection
 	m.selectInputs[selectFrom].SetValue(current.From)
 	m.selectInputs[selectTo].SetValue(current.To)
-	m.selectInputs[selectTypes].SetValue(strings.Join(current.Types, ","))
 	for index := range m.selectInputs {
 		m.selectInputs[index].CursorEnd()
 	}
+	m.typeCounts = map[string]int{}
+	for _, item := range m.inspection.library {
+		m.typeCounts[item.MediaType]++
+	}
+	m.typeChecked = map[string]bool{}
+	for _, kind := range current.Types {
+		matched := false
+		for name := range m.typeCounts {
+			if strings.EqualFold(name, kind) {
+				m.typeChecked[name], matched = true, true
+			}
+		}
+		if !matched {
+			m.typeCounts[kind], m.typeChecked[kind] = 0, true
+		}
+	}
+	m.typeOptions = sortedTypeNames(m.typeCounts)
 	m.selectErr = nil
 	m.focusSelection(selectFrom)
 	m.screen = screenSelection
 }
 
 func (m *tuiModel) focusSelection(field int) {
-	m.selectFocus = (field + selectFieldCount) % selectFieldCount
+	count := selectFieldCount + len(m.typeOptions)
+	m.selectFocus = (field + count) % count
 	for index := range m.selectInputs {
 		if index == m.selectFocus {
 			m.selectInputs[index].Focus()
@@ -631,6 +656,53 @@ func (m *tuiModel) focusSelection(field int) {
 			m.selectInputs[index].Blur()
 		}
 	}
+}
+
+// focusedType returns the media type checkbox under the cursor, if any.
+func (m tuiModel) focusedType() (string, bool) {
+	if m.selectFocus < selectFieldCount {
+		return "", false
+	}
+	return m.typeOptions[m.selectFocus-selectFieldCount], true
+}
+
+func (m tuiModel) checkedTypes() string {
+	checked := []string{}
+	for _, name := range m.typeOptions {
+		if m.typeChecked[name] {
+			checked = append(checked, name)
+		}
+	}
+	return strings.Join(checked, ",")
+}
+
+// suggestedFolder names a folder beside current for selection, such as
+// gopro-2026-08-24-to-2026-08-30-video.
+func suggestedFolder(current string, selection Selection) string {
+	dates := strings.NewReplacer("T", "-", " ", "-", ":", "")
+	parts := []string{"gopro"}
+	switch {
+	case selection.From != "" && selection.To != "":
+		parts = append(parts, dates.Replace(selection.From), "to", dates.Replace(selection.To))
+	case selection.From != "":
+		parts = append(parts, "from", dates.Replace(selection.From))
+	case selection.To != "":
+		parts = append(parts, "through", dates.Replace(selection.To))
+	}
+	for _, kind := range selection.Types {
+		parts = append(parts, strings.Map(func(r rune) rune {
+			if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+				return r
+			}
+			return -1
+		}, strings.ToLower(kind)))
+	}
+	return filepath.Join(filepath.Dir(current), strings.Join(parts, "-"))
+}
+
+// folderMatches reports whether the current folder already holds this selection.
+func (m tuiModel) folderMatches(selection Selection) bool {
+	return m.archive != nil && m.archive.Exists && m.archive.Data.Selection != nil && m.archive.Data.Selection.Equal(selection)
 }
 
 // selectionZone keeps the zone of an existing date selection, such as one made
@@ -647,10 +719,17 @@ func (m tuiModel) selectionZone() string {
 func (m tuiModel) updateSelection(message tea.Msg, stroke string) (tea.Model, tea.Cmd) {
 	switch stroke {
 	case "esc":
-		m.selectInputs[m.selectFocus].Blur()
+		for index := range m.selectInputs {
+			m.selectInputs[index].Blur()
+		}
 		m.selectErr = nil
 		m.screen = screenLibrary
 		return m, nil
+	case "space", " ", "x":
+		if kind, ok := m.focusedType(); ok {
+			m.typeChecked[kind] = !m.typeChecked[kind]
+			return m, nil
+		}
 	case "tab", "down":
 		m.focusSelection(m.selectFocus + 1)
 		return m, nil
@@ -658,7 +737,7 @@ func (m tuiModel) updateSelection(message tea.Msg, stroke string) (tea.Model, te
 		m.focusSelection(m.selectFocus - 1)
 		return m, nil
 	case "enter":
-		selection, err := ParseSelection(m.selectInputs[selectFrom].Value(), m.selectInputs[selectTo].Value(), m.selectInputs[selectTypes].Value(), m.selectionZone())
+		selection, err := ParseSelection(m.selectInputs[selectFrom].Value(), m.selectInputs[selectTo].Value(), m.checkedTypes(), m.selectionZone())
 		if err != nil {
 			m.selectErr = err
 			return m, nil
@@ -677,8 +756,21 @@ func (m tuiModel) updateSelection(message tea.Msg, stroke string) (tea.Model, te
 			return m, nil
 		}
 		m.selection, m.inspection, m.selectErr = &selection, &inspection, nil
-		m.selectInputs[m.selectFocus].Blur()
+		for index := range m.selectInputs {
+			m.selectInputs[index].Blur()
+		}
 		m.screen = screenLibrary
+		if !selection.IsEmpty() && !m.folderMatches(selection) {
+			m.pathInput.SetValue(suggestedFolder(m.archiveRoot, selection))
+			m.pathInput.CursorEnd()
+			m.pathInput.Err = nil
+			m.pathInput.Focus()
+			m.pathNote = "Suggested a new folder for this selection. Edit it, press enter to use it, or esc to keep " + m.archiveRoot + "."
+			m.screen = screenPath
+		}
+		return m, nil
+	}
+	if m.selectFocus >= selectFieldCount {
 		return m, nil
 	}
 	var command tea.Cmd
