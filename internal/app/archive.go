@@ -89,6 +89,7 @@ type Manifest struct {
 	Snapshots      []SnapshotRecord       `json:"snapshots"`
 	Items          map[string]*ItemRecord `json:"items"`
 	LegacyAdoption map[string]any         `json:"legacy_adoption,omitempty"`
+	Selection      *Selection             `json:"selection,omitempty"`
 }
 
 type Archive struct {

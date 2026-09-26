@@ -194,7 +194,7 @@ func loginCmd(ctx context.Context, envPath string) tea.Cmd {
 
 func inspectCmd(ctx context.Context, root, envPath string) tea.Cmd {
 	return func() tea.Msg {
-		inspection, err := InspectLibrary(ctx, root, envPath, 100)
+		inspection, err := InspectLibrary(ctx, root, envPath, 100, nil)
 		return inspectionFinishedMsg{inspection: inspection, err: err}
 	}
 }

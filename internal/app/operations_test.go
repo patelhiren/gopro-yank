@@ -40,7 +40,7 @@ func TestInspectLibraryIsReadOnly(t *testing.T) {
 	if err := os.WriteFile(envPath, []byte("AUTH_TOKEN=token\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	inspection, err := InspectLibrary(context.Background(), root, envPath, 100)
+	inspection, err := InspectLibrary(context.Background(), root, envPath, 100, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

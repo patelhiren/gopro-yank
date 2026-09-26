@@ -24,6 +24,8 @@ type LibraryInspection struct {
 	Latest         string
 	Types          map[string]int
 	ArchiveRoot    string
+	Selection      Selection
+	Unselected     int
 	items          []MediaItem
 }
 
@@ -34,6 +36,8 @@ type ArchiveOptions struct {
 	Parallel         int
 	PerPage          int
 	IgnoreSpaceCheck bool
+	// Selection nil keeps the archive's saved selection; an empty one selects everything.
+	Selection *Selection
 }
 
 type ArchiveEvent struct {
@@ -130,7 +134,7 @@ func inspectItems(items []MediaItem, archive *Archive) LibraryInspection {
 }
 
 // InspectLibrary reads GoPro and the local archive without writing either one.
-func InspectLibrary(ctx context.Context, root, envPath string, perPage int) (LibraryInspection, error) {
+func InspectLibrary(ctx context.Context, root, envPath string, perPage int, requested *Selection) (LibraryInspection, error) {
 	if perPage < 1 || perPage > 100 {
 		return LibraryInspection{}, errors.New("per-page must be 1–100")
 	}
@@ -146,7 +150,14 @@ func InspectLibrary(ctx context.Context, root, envPath string, perPage int) (Lib
 	if err != nil {
 		return LibraryInspection{}, err
 	}
-	return inspectItems(items, archive), nil
+	selection := resolveSelection(archive, requested)
+	selected, err := selection.Filter(items)
+	if err != nil {
+		return LibraryInspection{}, err
+	}
+	inspection := inspectItems(selected, archive)
+	inspection.Selection, inspection.Unselected = selection, len(items)-len(selected)
+	return inspection, nil
 }
 
 func ReplanLibrary(root string, inspection LibraryInspection) (LibraryInspection, error) {
@@ -154,7 +165,9 @@ func ReplanLibrary(root string, inspection LibraryInspection) (LibraryInspection
 	if err != nil {
 		return LibraryInspection{}, err
 	}
-	return inspectItems(inspection.items, archive), nil
+	replanned := inspectItems(inspection.items, archive)
+	replanned.Selection, replanned.Unselected = inspection.Selection, inspection.Unselected
+	return replanned, nil
 }
 
 func saveSourceSnapshot(ctx context.Context, client *GoProClient, archive *Archive, user string, perPage int, emit func(ArchiveEvent)) ([]MediaItem, error) {
@@ -164,6 +177,13 @@ func saveSourceSnapshot(ctx context.Context, client *GoProClient, archive *Archi
 	items, err := client.ListAll(ctx, perPage)
 	if err != nil {
 		return nil, err
+	}
+	selection := resolveSelection(archive, nil)
+	if items, err = selection.Filter(items); err != nil {
+		return nil, err
+	}
+	if len(items) == 0 && !selection.IsEmpty() {
+		return nil, fmt.Errorf("no GoPro media matches the selection (%s)", selection)
 	}
 	if emit != nil {
 		emit(ArchiveEvent{Stage: fmt.Sprintf("Saving details for %d originals", len(items)), Total: len(items)})
@@ -213,11 +233,14 @@ func ArchiveLibrary(ctx context.Context, options ArchiveOptions, emit func(Archi
 	if err != nil {
 		return result, err
 	}
+	selection := resolveSelection(archive, options.Selection)
+	archive.SetSelection(selection)
 	items, err := saveSourceSnapshot(ctx, client, archive, user, options.PerPage, emit)
 	if err != nil {
 		return result, err
 	}
 	result.Inspection = inspectItems(items, archive)
+	result.Inspection.Selection = selection
 	plan := result.Inspection
 	emit(ArchiveEvent{Stage: "Ready to archive", Total: result.Inspection.Remaining, Inspection: &plan})
 
