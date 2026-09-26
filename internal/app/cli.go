@@ -215,21 +215,23 @@ func connectGoPro(ctx context.Context, token, user string) (*GoProClient, string
 }
 
 type selectionFlags struct {
-	from, to, types *string
-	all             *bool
+	from, to, types, zone *string
+	cameraClock, all      *bool
 }
 
 func addSelectionFlags(flags *flag.FlagSet) selectionFlags {
 	return selectionFlags{
-		from:  flags.String("from", "", "first capture date or time on the camera clock, YYYY-MM-DD[THH:MM]"),
-		to:    flags.String("to", "", "last capture date or time, inclusive, YYYY-MM-DD[THH:MM]"),
-		types: flags.String("type", "", "media types to include, comma separated, e.g. Video,TimeLapseVideo"),
-		all:   flags.Bool("all", false, "select the whole library, replacing a saved selection"),
+		from:        flags.String("from", "", "first capture date or time as gopro.com shows it, YYYY-MM-DD[THH:MM]"),
+		to:          flags.String("to", "", "last capture date or time, inclusive, YYYY-MM-DD[THH:MM]"),
+		types:       flags.String("type", "", "media types to include, comma separated, e.g. Video,TimeLapseVideo"),
+		zone:        flags.String("tz", "", "time zone gopro.com is viewed in, e.g. America/Los_Angeles (default: this computer's)"),
+		cameraClock: flags.Bool("camera-clock", false, "match --from and --to against the camera's own clock instead"),
+		all:         flags.Bool("all", false, "select the whole library, replacing a saved selection"),
 	}
 }
 
 func (f selectionFlags) selection() (*Selection, error) {
-	return selectionFromFlags(*f.from, *f.to, *f.types, *f.all)
+	return selectionFromFlags(*f.from, *f.to, *f.types, *f.zone, *f.cameraClock, *f.all)
 }
 
 func archiveCommand(ctx context.Context, args []string) error {

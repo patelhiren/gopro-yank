@@ -87,7 +87,8 @@ func connectAccountInBrowser(ctx context.Context, envPath string) error {
 	return saveCredentials(envPath, token, user)
 }
 
-func inspectItems(items []MediaItem, archive *Archive) LibraryInspection {
+// inspectItems summarizes items; location is where dates are shown, nil for the camera clock.
+func inspectItems(items []MediaItem, archive *Archive, location *time.Location) LibraryInspection {
 	inspection := LibraryInspection{
 		Total:       len(items),
 		Types:       map[string]int{},
@@ -101,12 +102,8 @@ func inspectItems(items []MediaItem, archive *Archive) LibraryInspection {
 			kind = "Other"
 		}
 		inspection.Types[kind]++
-		date := item.CapturedAt
-		if date == "" {
-			date = item.CreatedAt
-		}
-		if len(date) >= 10 {
-			date = date[:10]
+		if captured, ok := captureClock(itemCaptureDate(item), location); ok {
+			date := captured.Format("2006-01-02")
 			if inspection.Earliest == "" || date < inspection.Earliest {
 				inspection.Earliest = date
 			}
@@ -155,7 +152,8 @@ func InspectLibrary(ctx context.Context, root, envPath string, perPage int, requ
 	if err != nil {
 		return LibraryInspection{}, err
 	}
-	inspection := inspectItems(selected, archive)
+	location, _ := selection.location()
+	inspection := inspectItems(selected, archive, location)
 	inspection.Selection, inspection.Unselected = selection, len(items)-len(selected)
 	return inspection, nil
 }
@@ -165,7 +163,8 @@ func ReplanLibrary(root string, inspection LibraryInspection) (LibraryInspection
 	if err != nil {
 		return LibraryInspection{}, err
 	}
-	replanned := inspectItems(inspection.items, archive)
+	location, _ := inspection.Selection.location()
+	replanned := inspectItems(inspection.items, archive, location)
 	replanned.Selection, replanned.Unselected = inspection.Selection, inspection.Unselected
 	return replanned, nil
 }
@@ -239,7 +238,8 @@ func ArchiveLibrary(ctx context.Context, options ArchiveOptions, emit func(Archi
 	if err != nil {
 		return result, err
 	}
-	result.Inspection = inspectItems(items, archive)
+	location, _ := selection.location()
+	result.Inspection = inspectItems(items, archive, location)
 	result.Inspection.Selection = selection
 	plan := result.Inspection
 	emit(ArchiveEvent{Stage: "Ready to archive", Total: result.Inspection.Remaining, Inspection: &plan})

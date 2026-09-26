@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func selectionItem(id, captured, kind string) MediaItem {
@@ -38,7 +39,7 @@ func TestSelectionDateBoundsIncludeTheWrittenPrecision(t *testing.T) {
 		selectionItem("last-day", "2026-09-14T23:59:59Z", "Video"),
 		selectionItem("after", "2026-09-15T00:00:00Z", "Video"),
 	}
-	selection, err := ParseSelection("2026-09-12", "2026-09-14", "")
+	selection, err := ParseSelection("2026-09-12", "2026-09-14", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +53,7 @@ func TestSelectionDateBoundsIncludeTheWrittenPrecision(t *testing.T) {
 		selectionItem("same-minute", "2026-09-12T22:00:59Z", "Video"),
 		selectionItem("late", "2026-09-12T22:01:00Z", "Video"),
 	}
-	selection, err = ParseSelection("2026-09-12T08:00", "2026-09-12 22:00", "")
+	selection, err = ParseSelection("2026-09-12T08:00", "2026-09-12 22:00", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +62,7 @@ func TestSelectionDateBoundsIncludeTheWrittenPrecision(t *testing.T) {
 	}
 }
 
-func TestSelectionUsesCameraWallClock(t *testing.T) {
+func TestSelectionCameraClockIgnoresZoneLabels(t *testing.T) {
 	items := []MediaItem{
 		selectionItem("zoned", "2026-09-12T08:30:00-07:00", "Video"),
 		selectionItem("utc", "2026-09-12T08:30:00Z", "Video"),
@@ -71,7 +72,7 @@ func TestSelectionUsesCameraWallClock(t *testing.T) {
 		selectionItem("undated", "", "Video"),
 	}
 	items[4].CreatedAt = "2026-09-12T08:45:00Z"
-	selection, err := ParseSelection("2026-09-12T08:00", "2026-09-12T09:00", "")
+	selection, err := ParseSelection("2026-09-12T08:00", "2026-09-12T09:00", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,13 +81,41 @@ func TestSelectionUsesCameraWallClock(t *testing.T) {
 	}
 }
 
+func TestSelectionMatchesGoProWebsiteDates(t *testing.T) {
+	// GoPro labels the camera clock as UTC; gopro.com shows it in the browser's zone.
+	items := []MediaItem{
+		selectionItem("GX011187", "2026-08-28T15:15:28Z", "Video"),
+		selectionItem("GX011194", "2026-08-29T00:38:44Z", "Video"),
+		selectionItem("GX011197", "2026-08-29T04:00:00Z", "Video"),
+		selectionItem("naive", "2026-08-29T03:59:59", "Video"),
+	}
+	website, err := ParseSelection("2026-08-28", "2026-08-28", "", "America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := selectedIDs(t, website, items); got != "GX011187,GX011194,naive" {
+		t.Fatalf("gopro.com dates in New York selected %q", got)
+	}
+	camera, _ := ParseSelection("2026-08-28", "2026-08-28", "", "")
+	if got := selectedIDs(t, camera, items); got != "GX011187" {
+		t.Fatalf("camera clock selected %q", got)
+	}
+
+	// Standard time applies in winter: 2026-01-10T04:30Z is 23:30 on Jan 9 in New York.
+	winter := []MediaItem{selectionItem("winter", "2026-01-10T04:30:00Z", "Video")}
+	january9, _ := ParseSelection("2026-01-09T23:00", "2026-01-09T23:59", "", "America/New_York")
+	if got := selectedIDs(t, january9, winter); got != "winter" {
+		t.Fatalf("winter time selected %q", got)
+	}
+}
+
 func TestSelectionOpenEndedRanges(t *testing.T) {
 	items := []MediaItem{
 		selectionItem("old", "2025-01-01T00:00:00Z", "Video"),
 		selectionItem("new", "2026-09-20T00:00:00Z", "Video"),
 	}
-	from, _ := ParseSelection("2026-01-01", "", "")
-	to, _ := ParseSelection("", "2025-12-31", "")
+	from, _ := ParseSelection("2026-01-01", "", "", "")
+	to, _ := ParseSelection("", "2025-12-31", "", "")
 	if got := selectedIDs(t, from, items); got != "new" {
 		t.Fatalf("--from only selected %q", got)
 	}
@@ -102,7 +131,7 @@ func TestSelectionTypesAreCaseInsensitive(t *testing.T) {
 		selectionItem("lapse", "2026-09-12T08:00:00Z", "TimeLapseVideo"),
 		selectionItem("undated-video", "", "Video"),
 	}
-	selection, err := ParseSelection("", "", " video, timelapsevideo ,VIDEO")
+	selection, err := ParseSelection("", "", " video, timelapsevideo ,VIDEO", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +141,7 @@ func TestSelectionTypesAreCaseInsensitive(t *testing.T) {
 	if got := selectedIDs(t, selection, items); got != "video,lapse,undated-video" {
 		t.Fatalf("type filter selected %q", got)
 	}
-	selection, _ = ParseSelection("2026-09-12", "2026-09-12", "Video")
+	selection, _ = ParseSelection("2026-09-12", "2026-09-12", "Video", "")
 	if got := selectedIDs(t, selection, items); got != "video" {
 		t.Fatalf("combined filter selected %q", got)
 	}
@@ -126,24 +155,49 @@ func TestParseSelectionRejectsBadInput(t *testing.T) {
 		{"2026-09-14", "2026-09-12"},
 		{"2026-09-12T10:00", "2026-09-12T09:59"},
 	} {
-		if _, err := ParseSelection(values[0], values[1], ""); err == nil {
+		if _, err := ParseSelection(values[0], values[1], "", ""); err == nil {
 			t.Errorf("accepted --from %q --to %q", values[0], values[1])
 		}
 	}
-	if _, err := ParseSelection("2026-09-12", "2026-09-12", ""); err != nil {
+	if _, err := ParseSelection("2026-09-12", "2026-09-12", "", ""); err != nil {
 		t.Errorf("rejected a single-day range: %v", err)
+	}
+	if _, err := ParseSelection("2026-09-12", "", "", "Mars/Olympus_Mons"); err == nil {
+		t.Error("accepted an unknown time zone")
 	}
 }
 
 func TestSelectionFromFlags(t *testing.T) {
-	if selection, err := selectionFromFlags("", "", "", false); err != nil || selection != nil {
-		t.Fatalf("no flags should keep the saved selection: %+v, %v", selection, err)
+	if selection, err := selectionFromFlags("", "", "", "UTC", false, false); err != nil || selection != nil {
+		t.Fatalf("no selection flags should keep the saved selection: %+v, %v", selection, err)
 	}
-	if selection, err := selectionFromFlags("", "", "", true); err != nil || selection == nil || !selection.IsEmpty() {
+	if selection, err := selectionFromFlags("", "", "", "", false, true); err != nil || selection == nil || !selection.IsEmpty() {
 		t.Fatalf("--all should select the whole library: %+v, %v", selection, err)
 	}
-	if _, err := selectionFromFlags("2026-09-12", "", "", true); err == nil {
+	if _, err := selectionFromFlags("2026-09-12", "", "", "", false, true); err == nil {
 		t.Fatal("--all was combined with --from")
+	}
+	if _, err := selectionFromFlags("2026-09-12", "", "", "UTC", true, false); err == nil {
+		t.Fatal("--camera-clock was combined with --tz")
+	}
+	if selection, err := selectionFromFlags("2026-09-12", "", "", "", false, false); err != nil || selection.Zone == "" || selection.Zone != localZoneName() {
+		t.Fatalf("dates should default to this computer's zone: %+v, %v", selection, err)
+	}
+	if selection, err := selectionFromFlags("2026-09-12", "", "", "America/Los_Angeles", false, false); err != nil || selection.Zone != "America/Los_Angeles" {
+		t.Fatalf("--tz was not kept: %+v, %v", selection, err)
+	}
+	if selection, err := selectionFromFlags("2026-09-12", "", "", "", true, false); err != nil || selection.Zone != "" {
+		t.Fatalf("--camera-clock kept a zone: %+v, %v", selection, err)
+	}
+	if selection, err := selectionFromFlags("", "", "Video", "", false, false); err != nil || selection.Zone != "" {
+		t.Fatalf("a type-only selection saved a zone: %+v, %v", selection, err)
+	}
+}
+
+func TestLocalZoneNameIsLoadable(t *testing.T) {
+	name := localZoneName()
+	if _, err := time.LoadLocation(name); err != nil {
+		t.Fatalf("local zone %q cannot be loaded: %v", name, err)
 	}
 }
 
@@ -232,7 +286,7 @@ func writeTestEnv(t *testing.T) string {
 }
 
 func archiveArgs(root, envPath string, extra ...string) []string {
-	return append([]string{"-out", root, "-env-file", envPath, "-state-dir", filepath.Join(root, "no-legacy"), "-parallel", "2"}, extra...)
+	return append([]string{"-out", root, "-env-file", envPath, "-state-dir", filepath.Join(root, "no-legacy"), "-parallel", "2", "-tz", "UTC"}, extra...)
 }
 
 func TestArchiveDownloadsOnlyTheSelection(t *testing.T) {
@@ -256,7 +310,7 @@ func TestArchiveDownloadsOnlyTheSelection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if archive.Data.Selection == nil || archive.Data.Selection.From != "2026-09-12" || archive.Data.Selection.To != "2026-09-14" {
+	if archive.Data.Selection == nil || archive.Data.Selection.From != "2026-09-12" || archive.Data.Selection.To != "2026-09-14" || archive.Data.Selection.Zone != "UTC" {
 		t.Fatalf("selection was not saved: %+v", archive.Data.Selection)
 	}
 	if len(archive.Data.Items) != 2 {
@@ -323,6 +377,46 @@ func TestArchiveSelectionCanChangeWithoutLosingFiles(t *testing.T) {
 	}
 }
 
+func TestArchiveUsesTheSavedTimeZone(t *testing.T) {
+	fake := newFakeGoPro(t, []map[string]any{
+		{"id": "evening", "filename": "GX011187.MP4", "file_size": 7, "captured_at": "2026-08-28T15:15:28Z", "type": "Video"},
+		{"id": "after-midnight", "filename": "GX011194.MP4", "file_size": 7, "captured_at": "2026-08-29T00:38:44Z", "type": "Video"},
+		{"id": "next-day", "filename": "GX011197.MP4", "file_size": 7, "captured_at": "2026-08-29T12:00:00Z", "type": "Video"},
+	})
+	envPath := writeTestEnv(t)
+	root := filepath.Join(t.TempDir(), "vlog")
+	args := []string{"-out", root, "-env-file", envPath, "-state-dir", filepath.Join(root, "no-legacy"), "-parallel", "1"}
+
+	if err := archiveCommand(context.Background(), append(args, "-from", "2026-08-28", "-to", "2026-08-28", "-tz", "America/New_York")); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.takeDownloads(); got != "after-midnight,evening" {
+		t.Fatalf("gopro.com Aug 28 in New York downloaded %q", got)
+	}
+	archive, _ := NewArchive(root)
+	if archive.Data.Selection == nil || archive.Data.Selection.Zone != "America/New_York" {
+		t.Fatalf("time zone was not saved: %+v", archive.Data.Selection)
+	}
+	inspection, err := InspectLibrary(context.Background(), root, envPath, 100, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.Total != 2 || inspection.Earliest != "2026-08-28" || inspection.Latest != "2026-08-28" {
+		t.Fatalf("saved zone was not applied on inspection: %+v", inspection)
+	}
+
+	if err := archiveCommand(context.Background(), append(args, "-from", "2026-08-28", "-to", "2026-08-28", "-camera-clock")); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.takeDownloads(); got != "" {
+		t.Fatalf("camera clock selection downloaded %q", got)
+	}
+	archive, _ = NewArchive(root)
+	if archive.Data.Selection.Zone != "" || archive.Data.Items["after-midnight"] == nil || !archive.IsArchived("after-midnight") {
+		t.Fatalf("camera clock selection lost the zone change or an archived file: %+v", archive.Data.Selection)
+	}
+}
+
 func TestArchiveRejectsAnEmptySelection(t *testing.T) {
 	fake := newFakeGoPro(t, tripLibrary())
 	envPath := writeTestEnv(t)
@@ -356,7 +450,7 @@ func TestInspectLibraryAppliesSelectionReadOnly(t *testing.T) {
 	newFakeGoPro(t, tripLibrary())
 	envPath := writeTestEnv(t)
 	root := filepath.Join(t.TempDir(), "vlog")
-	selection, err := ParseSelection("2026-09-12", "2026-09-14", "")
+	selection, err := ParseSelection("2026-09-12", "2026-09-14", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
