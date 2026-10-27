@@ -74,7 +74,7 @@ if [ "$PACKAGE" = true ]; then
     cp "$BINARY" "$STAGE_DIR/gopro-yank"
     cp "$ROOT_DIR/scripts/share-README.txt" "$STAGE_DIR/README.txt"
     cp "$ROOT_DIR/LICENSE" "$STAGE_DIR/LICENSE"
-    ditto -c -k --keepParent "$STAGE_DIR" "$BUILD_DIR/$NAME.zip"
+    ditto -c -k --norsrc --noextattr --keepParent "$STAGE_DIR" "$BUILD_DIR/$NAME.zip"
     rm -rf "$STAGE_DIR"
 fi
 
