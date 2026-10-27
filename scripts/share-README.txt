@@ -40,11 +40,24 @@ How it works
 1. Sign in on GoPro's website. GoPro Yank never sees your password.
 2. Browse capture dates, media types, total size, what is already archived,
    and what still needs a manual export.
-3. Choose a folder (default: ~/Pictures/GoPro) and confirm the download size.
+3. Choose a folder (default for the whole library: ~/Pictures/GoPro) and
+   confirm the download size.
 4. GoPro Yank downloads the available originals and checks every saved file.
 
 Stop whenever you like. Completed files stay completed, and the next run picks
 up what remains.
+
+
+Only part of the library
+------------------------
+
+Need just one trip or project? On the library screen, press "s" to choose a
+date range and media types. GoPro Yank suggests a folder for that selection in
+~/GoPro, such as ~/GoPro/gopro-2026-08-24-to-2026-08-30-video. Files go
+straight into one folder per day, such as 2026-08-24/GX011059.MP4.
+
+Dates and times are the ones gopro.com shows, in your computer's time zone.
+The folder remembers its selection, so later runs stay inside it.
 
 
 Prefer commands?
@@ -53,6 +66,24 @@ Prefer commands?
     gopro-yank library
     gopro-yank archive --out /Volumes/Photos/GoPro
     gopro-yank verify --out /Volumes/Photos/GoPro
+
+Choose part of the library with a capture window and media types. --to
+includes the whole day or minute you give it:
+
+    gopro-yank library --from 2026-09-12 --to 2026-09-14 --type Video
+    gopro-yank archive --out ~/Movies/tahoe --from 2026-09-12T08:00 --to 2026-09-14T22:00
+
+--tz picks another time zone, --camera-clock matches the camera's own clock
+instead, and --all widens a folder back to the whole library.
+
+Move an existing archive into per-day folders without downloading again:
+
+    gopro-yank reorganize --out ~/GoPro/tahoe
+
+Delete a local archive's saved files (asks you to type DELETE, and removes
+only the files GoPro Yank recorded; nothing is deleted from GoPro):
+
+    gopro-yank delete --out ~/Movies/tahoe
 
 Run "gopro-yank <command> --help" for options.
 
