@@ -29,3 +29,16 @@ func TestReportIsSelfContained(t *testing.T) {
 		t.Fatal("report has remote assets")
 	}
 }
+
+func TestHumanBytesUsesDecimalUnits(t *testing.T) {
+	for value, want := range map[int64]string{
+		999:               "999.0 B",
+		1000:              "1.0 KB",
+		112_900_000_000:   "112.9 GB",
+		1_500_000_000_000: "1.5 TB",
+	} {
+		if got := humanBytes(value); got != want {
+			t.Errorf("humanBytes(%d) = %q, want %q", value, got, want)
+		}
+	}
+}

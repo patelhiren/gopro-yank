@@ -13,7 +13,7 @@ import (
 func TestDemoStartsWithReadOnlyLibrary(t *testing.T) {
 	model := newTUIModel(context.Background(), "test", true)
 	view := model.View().Content
-	for _, expected := range []string{"GOPRO LIBRARY", "847", "Nothing was downloaded", "archive this library"} {
+	for _, expected := range []string{"GOPRO LIBRARY", "847", "Nothing was downloaded", "choose media"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("demo view does not contain %q:\n%s", expected, view)
 		}
@@ -119,5 +119,220 @@ func TestDemoNeverLoadsARealArchive(t *testing.T) {
 	model.reloadArchive()
 	if model.archive.Exists {
 		t.Fatal("demo loaded a real archive")
+	}
+}
+
+func pressKeys(t *testing.T, model tuiModel, keys ...tea.KeyPressMsg) tuiModel {
+	t.Helper()
+	for _, key := range keys {
+		updated, _ := model.Update(key)
+		model = updated.(tuiModel)
+	}
+	return model
+}
+
+func typeText(t *testing.T, model tuiModel, text string) tuiModel {
+	t.Helper()
+	for _, character := range text {
+		model = pressKeys(t, model, tea.KeyPressMsg(tea.Key{Code: character, Text: string(character)}))
+	}
+	return model
+}
+
+var (
+	keyEnter = tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})
+	keyTab   = tea.KeyPressMsg(tea.Key{Code: tea.KeyTab})
+	keyEsc   = tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape})
+	keySpace = tea.KeyPressMsg(tea.Key{Code: tea.KeySpace, Text: " "})
+	keyUp    = tea.KeyPressMsg(tea.Key{Code: tea.KeyUp})
+)
+
+// tripLibraryModel is a TUI showing the trip library as read from a local GoPro API.
+func tripLibraryModel(t *testing.T) tuiModel {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	newFakeGoPro(t, append(tripLibrary(), map[string]any{"id": "trip-edit", "filename": "", "captured_at": "2026-09-13T12:00:00Z", "type": "MultiClipEdit"}))
+	envPath := writeTestEnv(t)
+	root := filepath.Join(t.TempDir(), "vlog")
+	inspection, err := InspectLibrary(context.Background(), root, envPath, 100, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := newTUIModel(context.Background(), "test", false)
+	model.archiveRoot, model.envPath = root, envPath
+	model.reloadArchive()
+	model.inspection = &inspection
+	model.screen = screenLibrary
+	return model
+}
+
+func TestSelectionScreenFiltersLibraryWithoutDownloading(t *testing.T) {
+	model := tripLibraryModel(t)
+	if model.inspection.Total != 6 {
+		t.Fatalf("unexpected library: %+v", model.inspection)
+	}
+	model = pressKeys(t, model, tea.KeyPressMsg(tea.Key{Code: 's', Text: "s"}))
+	if model.screen != screenSelection {
+		t.Fatalf("s did not open the selection screen: %v", model.screen)
+	}
+	view := model.View().Content
+	for _, expected := range []string{"CHOOSE MEDIA", "gopro.com", "[ ] Photo", "[ ] TimeLapseVideo", "[ ] Video", "none checked = all types"} {
+		if !strings.Contains(view, expected) {
+			t.Fatalf("selection screen does not contain %q:\n%s", expected, view)
+		}
+	}
+	if strings.Contains(view, "MultiClipEdit") || len(model.typeOptions) != 3 {
+		t.Fatalf("edits are offered as a type to choose:\n%s", view)
+	}
+
+	model = typeText(t, model, "2026-09-12")
+	model = pressKeys(t, model, keyTab)
+	model = typeText(t, model, "2026-09-14")
+	// Tab past Photo and TimeLapseVideo to Video, check it, then check and uncheck TimeLapseVideo.
+	model = pressKeys(t, model, keyTab, keyTab, keyTab, keySpace, keyUp, keySpace, keySpace)
+	if view := model.View().Content; !strings.Contains(view, "[x] Video") || !strings.Contains(view, "[ ] TimeLapseVideo") {
+		t.Fatalf("type checkboxes did not toggle:\n%s", view)
+	}
+	model = pressKeys(t, model, keyEnter)
+	if model.screen != screenPath || model.selectErr != nil {
+		t.Fatalf("applying a selection did not suggest a folder: screen=%v err=%v", model.screen, model.selectErr)
+	}
+	suggested := filepath.Join(selectionFoldersRoot(), "gopro-2026-09-12-to-2026-09-14-video")
+	if model.pathInput.Value() != suggested || !strings.Contains(model.View().Content, "Suggested a new folder") {
+		t.Fatalf("unexpected folder suggestion %q", model.pathInput.Value())
+	}
+	model = pressKeys(t, model, keyEnter)
+	if model.screen != screenLibrary || model.archiveRoot != suggested {
+		t.Fatalf("suggested folder was not used: screen=%v root=%s", model.screen, model.archiveRoot)
+	}
+	if model.selection == nil || model.selection.From != "2026-09-12" || model.selection.Zone == "" {
+		t.Fatalf("unexpected selection: %+v", model.selection)
+	}
+	if model.inspection.Total != 1 || model.inspection.Unselected != 5 || model.inspection.Remaining != 1 {
+		t.Fatalf("library was not filtered: %+v", model.inspection)
+	}
+	if view := model.View().Content; !strings.Contains(view, "Selected: 2026-09-12 to 2026-09-14") || !strings.Contains(view, "5 others not selected") {
+		t.Fatalf("library view does not show the selection:\n%s", view)
+	}
+	if _, err := os.Stat(model.archiveRoot); !os.IsNotExist(err) {
+		t.Fatalf("choosing media changed the archive folder: %v", err)
+	}
+
+	// Clearing every field returns to the whole library.
+	model = pressKeys(t, model, tea.KeyPressMsg(tea.Key{Code: 's', Text: "s"}))
+	if !model.typeChecked["Video"] {
+		t.Fatal("reopening did not keep the checked type")
+	}
+	for index := range model.selectInputs {
+		model.selectInputs[index].SetValue("")
+	}
+	model.typeChecked = map[string]bool{}
+	model = pressKeys(t, model, keyEnter)
+	if model.screen != screenLibrary || model.archiveRoot != suggested {
+		t.Fatalf("whole library suggested a folder: screen=%v root=%s", model.screen, model.archiveRoot)
+	}
+	if model.inspection.Total != 6 || model.selection == nil || !model.selection.IsEmpty() {
+		t.Fatalf("clearing did not select the whole library: %+v %+v", model.inspection, model.selection)
+	}
+}
+
+func TestSelectionScreenKeepsBadInputOnScreen(t *testing.T) {
+	model := tripLibraryModel(t)
+	model = pressKeys(t, model, tea.KeyPressMsg(tea.Key{Code: 's', Text: "s"}))
+	model = typeText(t, model, "2026-09-14")
+	model = pressKeys(t, model, keyTab)
+	model = typeText(t, model, "2026-09-12")
+	model = pressKeys(t, model, keyEnter)
+	if model.screen != screenSelection || model.selectErr == nil || !strings.Contains(model.View().Content, "--from must be before --to") {
+		t.Fatalf("reversed range was accepted: screen=%v err=%v", model.screen, model.selectErr)
+	}
+
+	model.selectInputs[selectFrom].SetValue("2027-01-01")
+	model.selectInputs[selectTo].SetValue("")
+	model = pressKeys(t, model, keyEnter)
+	if model.screen != screenSelection || model.selectErr == nil || !strings.Contains(model.selectErr.Error(), "no GoPro media matches") {
+		t.Fatalf("empty selection was accepted: screen=%v err=%v", model.screen, model.selectErr)
+	}
+
+	model = pressKeys(t, model, keyEsc)
+	if model.screen != screenLibrary || model.selection != nil || model.inspection.Total != 6 {
+		t.Fatalf("esc changed the selection: screen=%v selection=%+v", model.screen, model.selection)
+	}
+}
+
+func TestConfirmWarnsWhenFolderSelectionChanges(t *testing.T) {
+	model := tripLibraryModel(t)
+	if err := archiveCommand(context.Background(), archiveArgs(model.archiveRoot, model.envPath, "-type", "Photo")); err != nil {
+		t.Fatal(err)
+	}
+	model.reloadArchive()
+	inspection, err := SelectLibrary(model.archiveRoot, *model.inspection, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.inspection = &inspection
+	if model.inspection.Total != 1 || model.inspection.Archived != 1 {
+		t.Fatalf("saved folder selection was not applied: %+v", model.inspection)
+	}
+
+	model = pressKeys(t, model, tea.KeyPressMsg(tea.Key{Code: 's', Text: "s"}))
+	if !model.typeChecked["Photo"] {
+		t.Fatal("the folder's saved type was not checked")
+	}
+	// Uncheck Photo (first type) and check Video (third).
+	model = pressKeys(t, model, keyTab, keyTab, keySpace, keyTab, keyTab, keySpace)
+	// Keep the current folder instead of the suggestion, then continue to confirmation.
+	model = pressKeys(t, model, keyEnter, keyEsc)
+	if model.screen != screenLibrary {
+		t.Fatalf("esc on the suggestion did not return to the library: %v", model.screen)
+	}
+	model = pressKeys(t, model, keyEnter)
+	if model.screen != screenConfirm {
+		t.Fatalf("expected confirmation, got %v", model.screen)
+	}
+	view := model.View().Content
+	if !strings.Contains(view, "changes from Photo to Video") {
+		t.Fatalf("confirmation does not warn about the selection change:\n%s", view)
+	}
+}
+
+func TestChangingFolderUsesItsSavedSelection(t *testing.T) {
+	model := tripLibraryModel(t)
+	other := filepath.Join(t.TempDir(), "photos")
+	if err := archiveCommand(context.Background(), archiveArgs(other, model.envPath, "-type", "Photo")); err != nil {
+		t.Fatal(err)
+	}
+	model = pressKeys(t, model, tea.KeyPressMsg(tea.Key{Code: 'e', Text: "e"}))
+	model.pathInput.SetValue(other)
+	model = pressKeys(t, model, keyEnter)
+	if model.screen != screenLibrary || model.inspection.Total != 1 || len(model.inspection.Selection.Types) != 1 {
+		t.Fatalf("folder change ignored its saved selection: %+v", model.inspection)
+	}
+}
+
+func TestSuggestedFolderNames(t *testing.T) {
+	parent := filepath.Join("Users", "me", "GoPro")
+	for want, selection := range map[string]Selection{
+		"gopro-2026-08-24-to-2026-08-30":             {From: "2026-08-24", To: "2026-08-30"},
+		"gopro-2026-08-24-0800-to-2026-08-24-2200":   {From: "2026-08-24T08:00", To: "2026-08-24 22:00"},
+		"gopro-from-2026-08-24-video-timelapsevideo": {From: "2026-08-24", Types: []string{"Video", "TimeLapseVideo"}},
+		"gopro-through-2026-08-30":                   {To: "2026-08-30"},
+		"gopro-photo":                                {Types: []string{"Photo"}},
+	} {
+		if got := suggestedFolder(parent, selection); got != filepath.Join(parent, want) {
+			t.Errorf("suggestedFolder(%+v) = %s, want %s", selection, got, want)
+		}
+	}
+}
+
+func TestNoFolderSuggestionWhenFolderAlreadyMatches(t *testing.T) {
+	model := tripLibraryModel(t)
+	if err := archiveCommand(context.Background(), archiveArgs(model.archiveRoot, model.envPath, "-type", "Photo")); err != nil {
+		t.Fatal(err)
+	}
+	model.reloadArchive()
+	model = pressKeys(t, model, tea.KeyPressMsg(tea.Key{Code: 's', Text: "s"}), keyEnter)
+	if model.screen != screenLibrary {
+		t.Fatalf("re-applying the folder's own selection suggested another folder: %v", model.screen)
 	}
 }

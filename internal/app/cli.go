@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,6 +60,8 @@ Usage:
   gopro-yank library [options]  Inspect your library without downloading
   gopro-yank archive [options]  Archive or resume available originals
   gopro-yank verify [options]   Check every archived file
+  gopro-yank delete --out DIR   Delete a local archive folder's saved files
+  gopro-yank reorganize --out DIR  Move saved files into per-date folders
 
 Account:
   gopro-yank login [options]    Connect without the interactive app
@@ -212,6 +215,26 @@ func connectGoPro(ctx context.Context, token, user string) (*GoProClient, string
 	return client, user, nil
 }
 
+type selectionFlags struct {
+	from, to, types, zone *string
+	cameraClock, all      *bool
+}
+
+func addSelectionFlags(flags *flag.FlagSet) selectionFlags {
+	return selectionFlags{
+		from:        flags.String("from", "", "first capture date or time as gopro.com shows it, YYYY-MM-DD[THH:MM]"),
+		to:          flags.String("to", "", "last capture date or time, inclusive, YYYY-MM-DD[THH:MM]"),
+		types:       flags.String("type", "", "media types to include, comma separated, e.g. Video,TimeLapseVideo"),
+		zone:        flags.String("tz", "", "time zone gopro.com is viewed in, e.g. America/Los_Angeles (default: this computer's)"),
+		cameraClock: flags.Bool("camera-clock", false, "match --from and --to against the camera's own clock instead"),
+		all:         flags.Bool("all", false, "select the whole library, replacing a saved selection"),
+	}
+}
+
+func (f selectionFlags) selection() (*Selection, error) {
+	return selectionFromFlags(*f.from, *f.to, *f.types, *f.zone, *f.cameraClock, *f.all)
+}
+
 func archiveCommand(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("archive", flag.ContinueOnError)
 	out := flags.String("out", defaultArchiveRoot(), "archive folder")
@@ -220,8 +243,17 @@ func archiveCommand(ctx context.Context, args []string) error {
 	parallel := flags.Int("parallel", 8, "downloads to run at once")
 	perPage := flags.Int("per-page", 100, "GoPro items requested at once")
 	ignoreSpace := flags.Bool("ignore-space-check", false, "continue when the disk-space check fails")
+	layout := flags.String("layout", "", "date: one folder per day; nested: one folder per original (default: date for a selection)")
+	selectFlags := addSelectionFlags(flags)
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	selection, err := selectFlags.selection()
+	if err != nil {
+		return exitError{2, err}
+	}
+	if _, err := parseLayout(*layout); err != nil {
+		return exitError{2, err}
 	}
 	lastStage := ""
 	result, err := ArchiveLibrary(ctx, ArchiveOptions{
@@ -231,6 +263,8 @@ func archiveCommand(ctx context.Context, args []string) error {
 		Parallel:         *parallel,
 		PerPage:          *perPage,
 		IgnoreSpaceCheck: *ignoreSpace,
+		Selection:        selection,
+		Layout:           *layout,
 	}, func(event ArchiveEvent) {
 		if event.Stage != "" && event.Stage != lastStage {
 			fmt.Println(event.Stage + "...")
@@ -245,6 +279,9 @@ func archiveCommand(ctx context.Context, args []string) error {
 		}
 		if event.Inspection != nil {
 			inspection := event.Inspection
+			if !inspection.Selection.IsEmpty() {
+				fmt.Printf("Selection: %s\n", inspection.Selection)
+			}
 			fmt.Printf("GoPro: %d original(s) · %d archived · %d to archive (%s) · %d need manual export\n", inspection.Total, inspection.Archived, inspection.Remaining, humanBytes(inspection.RemainingBytes), inspection.Manual)
 		}
 	})
@@ -272,6 +309,9 @@ func printLibraryInspection(inspection LibraryInspection) {
 		fmt.Printf(" · %s to %s", inspection.Earliest, inspection.Latest)
 	}
 	fmt.Println()
+	if !inspection.Selection.IsEmpty() {
+		fmt.Printf("Selection: %s · %d other item(s) not selected\n", inspection.Selection, inspection.Unselected)
+	}
 	kinds := make([]string, 0, len(inspection.Types))
 	for kind := range inspection.Types {
 		kinds = append(kinds, kind)
@@ -289,11 +329,16 @@ func libraryCommand(ctx context.Context, args []string) error {
 	out := flags.String("out", defaultArchiveRoot(), "archive folder")
 	envPath := flags.String("env-file", defaultEnvFile(), "saved GoPro login")
 	perPage := flags.Int("per-page", 100, "GoPro items requested at once")
+	selectFlags := addSelectionFlags(flags)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
+	selection, err := selectFlags.selection()
+	if err != nil {
+		return exitError{2, err}
+	}
 	fmt.Println("Reading your GoPro library...")
-	inspection, err := InspectLibrary(ctx, *out, *envPath, *perPage)
+	inspection, err := InspectLibrary(ctx, *out, *envPath, *perPage, selection)
 	if err != nil {
 		return err
 	}
@@ -388,6 +433,58 @@ func verifyCommand(ctx context.Context, args []string) error {
 	return verifyErr
 }
 
+func deleteCommand(ctx context.Context, args []string, input io.Reader) error {
+	flags := flag.NewFlagSet("delete", flag.ContinueOnError)
+	out := flags.String("out", "", "archive folder to clear (required)")
+	yes := flags.Bool("yes", false, "skip typing DELETE to confirm")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *out == "" {
+		return exitError{2, errors.New("delete needs --out with the archive folder to clear")}
+	}
+	plan, err := PlanLocalArchive(*out)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Archive: %s\nThis removes %d file(s) · %s for %d original(s) and the GoPro Yank records.\nGoPro cloud media and unrelated files are not touched.\n", plan.Root, plan.Files, humanBytes(plan.Bytes), plan.Originals)
+	if !*yes {
+		fmt.Print("Type DELETE to confirm: ")
+		answer, _ := bufio.NewReader(input).ReadString('\n')
+		if strings.TrimSpace(answer) != "DELETE" {
+			return exitError{1, errors.New("nothing was deleted")}
+		}
+	}
+	result, err := DeleteLocalArchive(ctx, *out)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Deleted %d local file(s) · %s\n", result.RemovedFiles, humanBytes(result.RemovedBytes))
+	return nil
+}
+
+func reorganizeCommand(ctx context.Context, args []string) error {
+	flags := flag.NewFlagSet("reorganize", flag.ContinueOnError)
+	out := flags.String("out", "", "archive folder to reorganize (required)")
+	layout := flags.String("layout", layoutDate, "date: one folder per day; nested: one folder per original")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *out == "" {
+		return exitError{2, errors.New("reorganize needs --out with the archive folder")}
+	}
+	if _, err := parseLayout(*layout); err != nil || *layout == "" {
+		return exitError{2, fmt.Errorf("unknown layout %q; use date or nested", *layout)}
+	}
+	result, err := ReorganizeArchive(ctx, *out, *layout)
+	fmt.Printf("Moved %d of %d file(s) into the %s layout\n", result.Moved, result.Files, result.Layout)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Next: gopro-yank verify --out %s\n", *out)
+	return nil
+}
+
 func run(ctx context.Context, args []string, version string) error {
 	if len(args) == 0 {
 		if terminalIsInteractive() {
@@ -416,6 +513,10 @@ func run(ctx context.Context, args []string, version string) error {
 		return verifyCommand(ctx, args[1:])
 	case "login":
 		return loginCommand(ctx, args[1:])
+	case "delete":
+		return deleteCommand(ctx, args[1:], os.Stdin)
+	case "reorganize":
+		return reorganizeCommand(ctx, args[1:])
 	// Compatibility aliases and advanced archive tools remain scriptable.
 	case "pull":
 		return pullCommand(ctx, args[1:])

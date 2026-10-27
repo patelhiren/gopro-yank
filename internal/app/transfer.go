@@ -61,15 +61,6 @@ func collisionKey(value string) string { return strings.ToLower(strings.TrimRigh
 
 func extractZIP(zipPath string, archive *Archive, item MediaItem) ([]FileRecord, string, error) {
 	segment := mediaSegment(item.ID)
-	captured := item.CapturedAt
-	if captured == "" {
-		captured = item.CreatedAt
-	}
-	relativeDir := filepath.ToSlash(filepath.Join("originals", filepath.FromSlash(datePath(captured)), segment))
-	destination, err := secureJoin(archive.Root, relativeDir)
-	if err != nil {
-		return nil, "", err
-	}
 	staged := filepath.Join(archive.StagingDir, "extract", segment)
 	if err := os.RemoveAll(staged); err != nil {
 		return nil, "", err
@@ -127,10 +118,28 @@ func extractZIP(zipPath string, archive *Archive, item MediaItem) ([]FileRecord,
 		if uint64(size) != member.UncompressedSize64 {
 			return nil, "", fmt.Errorf("ZIP member size mismatch for %s", member.Name)
 		}
-		records = append(records, FileRecord{Path: filepath.ToSlash(filepath.Join(filepath.FromSlash(relativeDir), candidate)), Size: size, SHA256: hex.EncodeToString(hash.Sum(nil)), ZIPCRC32: fmt.Sprintf("%08x", member.CRC32), ZIPMember: member.Name})
+		records = append(records, FileRecord{Path: candidate, Size: size, SHA256: hex.EncodeToString(hash.Sum(nil)), ZIPCRC32: fmt.Sprintf("%08x", member.CRC32), ZIPMember: member.Name})
 	}
 	if len(records) == 0 {
 		return nil, "", errors.New("source ZIP contains no files")
+	}
+	if archive.Layout() == layoutDate {
+		return archive.placeByDate(item, staged, records)
+	}
+	return placeNested(archive, item, staged, records)
+}
+
+// placeNested moves staged files into originals/YYYY/MM/DD/id-<hex>/. Staged
+// record paths are bare file names.
+func placeNested(archive *Archive, item MediaItem, staged string, records []FileRecord) ([]FileRecord, string, error) {
+	segment := mediaSegment(item.ID)
+	relativeDir := nestedDir(item)
+	destination, err := secureJoin(archive.Root, relativeDir)
+	if err != nil {
+		return nil, "", err
+	}
+	for index := range records {
+		records[index].Path = relativeDir + "/" + records[index].Path
 	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 		return nil, "", err

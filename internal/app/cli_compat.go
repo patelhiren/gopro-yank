@@ -141,11 +141,11 @@ func demoCommand(args []string) error {
 	}
 	total := int64(0)
 	for index := 1; index <= *count; index++ {
-		total += int64(128+index*17) * 1024 * 1024
+		total += int64(128+index*17) * 1000 * 1000
 	}
 	fmt.Printf("GOPRO YANK / DEMO\nDownload every available original. Verify every saved file.\n\nsource    %d simulated originals · %s\narchive   portable + resumable\n\n", *count, humanBytes(total))
 	for index := 1; index <= *count; index++ {
-		size := int64(128+index*17) * 1024 * 1024
+		size := int64(128+index*17) * 1000 * 1000
 		fmt.Printf("✓ %02d/%02d  demo-%03d  %9s  verified\n", index, *count, index, humanBytes(size))
 		time.Sleep(90 * time.Millisecond)
 	}
