@@ -1,6 +1,7 @@
 # Build output
 /gopro-yank
 /dist/
+/build/
 /www/dist/
 node_modules/
 

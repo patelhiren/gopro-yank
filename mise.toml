@@ -83,6 +83,10 @@ run = "scripts/sign-macos.sh"
 description = "Build, sign and notarize the macOS binary with Apple"
 run = "scripts/sign-macos.sh --notarize"
 
+[tasks.share]
+description = "Build, sign, notarize and zip the macOS binary with a README for sharing"
+run = "scripts/sign-macos.sh --notarize --package"
+
 [tasks.release]
 description = "Publish the release for the checked-out tag"
 run = "goreleaser release --clean"

@@ -2,16 +2,19 @@
 # Builds the darwin/arm64 release binary into ./gopro-yank and signs it with the
 # IndeSpark Developer ID certificate. Pass --notarize to additionally submit it
 # to Apple for notarization, using the "highlights-notary" notarytool keychain
-# profile (override with NOTARY_PROFILE).
+# profile (override with NOTARY_PROFILE). Pass --package to zip the binary with
+# scripts/share-README.txt and LICENSE into ./build for sharing.
 #
 # A bare Mach-O binary cannot be stapled, so Gatekeeper confirms notarization
 # online the first time it runs the binary.
 set -euo pipefail
 
 NOTARIZE=false
+PACKAGE=false
 for arg in "$@"; do
     case "$arg" in
         --notarize) NOTARIZE=true ;;
+        --package) PACKAGE=true ;;
         *) echo "error: unknown argument '$arg'" >&2; exit 1 ;;
     esac
 done
@@ -60,5 +63,21 @@ if [ "$NOTARIZE" = true ]; then
     spctl --assess --type open --context context:primary-signature --verbose=2 "$BINARY"
 fi
 
+if [ "$PACKAGE" = true ]; then
+    echo "==> Packaging…"
+    [ "$NOTARIZE" = true ] || echo "warning: not notarized; Gatekeeper will block it on other Macs" >&2
+    BUILD_DIR="$ROOT_DIR/build"
+    NAME="gopro-yank-$VERSION-macos-arm64"
+    STAGE_DIR="$BUILD_DIR/$NAME"
+    rm -rf "$STAGE_DIR" "$BUILD_DIR/$NAME.zip"
+    mkdir -p "$STAGE_DIR"
+    cp "$BINARY" "$STAGE_DIR/gopro-yank"
+    cp "$ROOT_DIR/scripts/share-README.txt" "$STAGE_DIR/README.txt"
+    cp "$ROOT_DIR/LICENSE" "$STAGE_DIR/LICENSE"
+    ditto -c -k --keepParent "$STAGE_DIR" "$BUILD_DIR/$NAME.zip"
+    rm -rf "$STAGE_DIR"
+fi
+
 echo "==> Done."
 echo "Binary: $BINARY"
+[ "$PACKAGE" = false ] || echo "Package: $BUILD_DIR/$NAME.zip"
