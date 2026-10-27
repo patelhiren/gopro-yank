@@ -97,6 +97,24 @@ publishing.
 
 The version lives only in the tag. Nothing in the tree changes for a release.
 
+### Signing & notarization
+
+Signing runs locally on a Mac, not in the Release workflow.
+`mise run sign` builds `./gopro-yank` for darwin/arm64 with the same flags as
+goreleaser, then signs it with the `Developer ID Application` certificate for
+team `DASAX5TMR3`, the hardened runtime and a secure timestamp.
+`mise run notarize` also zips the binary, submits it to Apple, waits, and fails
+unless the status is `Accepted`. A bare binary cannot be stapled, so Gatekeeper
+looks the ticket up online on first run. Requires:
+
+- The Developer ID Application certificate for team `DASAX5TMR3` in your
+  keychain (Xcode → Settings → Accounts → Manage Certificates → **+** →
+  Developer ID Application)
+- An App Store Connect API key stored as a notarytool keychain profile, by
+  default `highlights-notary` (override with `NOTARY_PROFILE`):
+  `xcrun notarytool store-credentials "highlights-notary" --key AuthKey_XXXX.p8
+  --key-id XXXX --issuer YYYY`
+
 ## Website
 
 Every merge to main that touches `www/` deploys it: the Deploy website workflow
